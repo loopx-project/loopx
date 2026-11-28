@@ -203,7 +203,9 @@ export function GoalStrategyDocument({value, recordedAt, agentId, version, origi
         {Object.keys(additional).length ? <details><summary>{zh ? "其他决策字段" : "Additional decision fields"}</summary>
           <NativeDecisionFields value={additional}/>
         </details> : null}
-        <details className="research-node-provenance"><summary>{zh ? "完整原始记录与来源" : "Complete original record and source"}</summary>
+        <details className="research-node-provenance"><summary>{executionRecord
+          ? (zh ? "执行记录详情与来源" : "Execution record details and source")
+          : (zh ? "完整原始记录与来源" : "Complete original record and source")}</summary>
           <dl><FragmentField label="Goal" value={originalGoalId}/><FragmentField label={zh ? "来源" : "Source"} value={namespace}/>
             <FragmentField label={executionRecord ? (zh ? "执行记录身份" : "Execution record identity") : (zh ? "版本" : "Version")} value={version}/><FragmentField label={zh ? "记录时间" : "Recorded time"} value={recordedAt}/></dl>
           <pre tabIndex={0}>{JSON.stringify(originalRecord ?? value, null, 2)}</pre>

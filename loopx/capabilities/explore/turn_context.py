@@ -15,6 +15,7 @@ from ...control_plane.capability_hooks import (
     TurnStartHookRegistration,
     TurnStartContextProjector,
     dispatch_turn_start_hooks,
+    merge_turn_start_dispatch,
 )
 from ...control_plane.effect_runtime import effect_runtime_request_scope, effect_runtime_result
 from ...explore_graph import compact_explore_graph_policy
@@ -24,10 +25,7 @@ from .result_log import (
     explore_result_log_path,
     load_explore_result_events_strict,
 )
-from .todo_branch_plan import (
-    build_explore_todo_branch_plan,
-    resolve_todo_branch_plan_gate,
-)
+from .harness_gate import resolve_todo_branch_plan_gate
 
 
 def _policy(registry_path: Path, goal_id: str, runtime_root: Path | None = None) -> tuple[dict[str, Any], Any, dict[str, Any]]:
@@ -121,7 +119,8 @@ def explore_turn_context(
     )
     from ..todo_replan_cadence.machine_defaults import work_yardstick_enabled
     yardstick = work_yardstick_enabled(goal, runtime_root)
-    projection, plan, focus, todos = {}, {}, {}, {}
+    projection, focus, todos = {}, {}, {}
+    plan: Mapping[str, object] = {}
     page_tasks = {row["todo_id"] for row in review_pages
                   if isinstance(row, Mapping) and isinstance(row.get("todo_id"), str)} if isinstance(review_pages, list) else set()
     if graph or gate["enabled"]:
@@ -145,16 +144,22 @@ def explore_turn_context(
             status="open",
             agent_id=agent_id,
             runtime_root_arg=str(runtime_root),
+            include_acceptance=False,
         )
     if gate["enabled"]:
-        plan = build_explore_todo_branch_plan(
-            goal_id=goal_id,
-            agent_id=agent_id,
-            todos=todos.get("todos") or [],
-            projection=projection,
-            orchestration=goal.get("spawn_policy"),
-            width=3,
-        )
+        try:
+            from .todo_branch_plan import build_explore_todo_branch_plan
+        except ModuleNotFoundError:
+            plan = {}
+        else:
+            plan = build_explore_todo_branch_plan(
+                goal_id=goal_id,
+                agent_id=agent_id,
+                todos=todos.get("todos") or [],
+                projection=projection,
+                orchestration=goal.get("spawn_policy"),
+                width=3,
+            )
     # Transport only the existing identity/link fields consumed by the typed
     # reader, not task descriptions, notes or unrelated acceptance material.
     scopes = {row["todo_id"]: {key: row[key] for key in (
@@ -296,14 +301,7 @@ def extend_turn_start_dispatch(
         },
     )
     extra = dispatch_turn_start_hooks((hook,))
-    result = dict(dispatch or {})
-    for key in ("results", "required_reads", "failures", "contexts"):
-        if key == "contexts" and not extra.get(key):
-            continue
-        result[key] = list(result.get(key) or []) + list(extra.get(key) or [])
-    for key in ("registered_count", "invoked_count"):
-        result[key] = int(result.get(key) or 0) + int(extra.get(key) or 0)
-    return result
+    return merge_turn_start_dispatch(dispatch, extra, include_contexts=True)
 
 
 def project_settlement_attachment(plan: dict[str, Any], *, registry_path: Path, runtime_root: Path | None = None) -> dict[str, Any]:
@@ -333,7 +331,12 @@ def project_settlement_attachment(plan: dict[str, Any], *, registry_path: Path, 
         projection_slots=("explore_result_attachment",),
         requested_read_scope=("goal.explore_policy",), producer=produce,
     ),))
-    attachment = dispatch["projections"].get("explore_result_attachment")
+    projections = dispatch.get("projections")
+    attachment = (
+        projections.get("explore_result_attachment")
+        if isinstance(projections, Mapping)
+        else None
+    )
     if attachment is None:
         return ({**plan, "capability_hook_failures": dispatch["failures"]}
                 if dispatch["failures"] else plan)

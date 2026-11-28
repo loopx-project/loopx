@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import argparse
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -116,6 +116,17 @@ def _scheduler_execution_context_from_args(
             "source": "quota_cli_invocation",
         }
     return None
+
+
+def _format_runtime_profile_choices(
+    profiles: Iterable[SchedulerRuntimeProfile],
+) -> str:
+    names = sorted(profile.value for profile in profiles)
+    if len(names) <= 1:
+        return "".join(names)
+    if len(names) == 2:
+        return f"{names[0]} or {names[1]}"
+    return f"{', '.join(names[:-1])}, or {names[-1]}"
 
 
 def validate_quota_command_context_request(
@@ -260,10 +271,13 @@ def validate_quota_command_context_request(
     if begin_turn:
         profile = scheduler_runtime_profile_for_execution_context(scheduler_context)
         if profile not in GUIDED_START_TURN_RUNTIME_PROFILES:
+            allowed_profiles = _format_runtime_profile_choices(
+                GUIDED_START_TURN_RUNTIME_PROFILES
+            )
             raise QuotaCommandValidationError(
-                "--begin-turn requires runtime-profile codex_app_heartbeat, "
-                "trae_app, or codex_app_ssh_goal; every other host starts its turn by "
-                "passing its own --turn-instance-id"
+                f"--begin-turn requires runtime-profile {allowed_profiles}; "
+                "every other host starts its turn by passing its own "
+                "--turn-instance-id"
             )
     if (
         (heartbeat_turn_id or begin_turn)

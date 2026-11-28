@@ -250,6 +250,8 @@ def require_confirmed_operation_resume(
             else "confirmed operation requires its original resumable session"
         )
     parameters = proposal["normalized_parameters"]
+    if not isinstance(parameters, Mapping):
+        raise ValueError("confirmed operation parameters are malformed")
     require_current_operation_scope(registry_path, parameters)
     store._agent_operation_plan(
         proposal, action="wake",

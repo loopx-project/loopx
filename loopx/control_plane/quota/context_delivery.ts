@@ -38,7 +38,8 @@ export function compactTodoContextSource(content: JsonObject): JsonObject {
   }
   const authority = jsonObject(content.authority_read);
   const model = jsonObject(authority?.todo_read_model);
-  if (model?.schema_version === COORDINATION_STATE_CONTRACT.todo_read_record.schema_version
+  if (model && (model.schema_version === COORDINATION_STATE_CONTRACT.todo_read_record.schema_version
+      || model.schema_version === COORDINATION_STATE_CONTRACT.todo_domain_record.schema_version)
       && Array.isArray(model.contract_fields)
       && model.contract_fields.every(field => typeof field === "string")) {
     const {contract_fields: _dictionary, ...metadata} = model;

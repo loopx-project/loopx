@@ -821,7 +821,14 @@ def connect_lark_goal_topic(
 
     payload = read_goal_channel_binding(binding_path)
     existing = binding_for_goal(payload, goal_id, connection_id=connection_id) or {}
-    receipts = dict(existing.get("receipts") or {})
+    raw_receipts = existing.get("receipts")
+    receipts = dict(raw_receipts) if isinstance(raw_receipts, Mapping) else {}
+    raw_channel = existing.get("channel")
+    existing_channel = dict(raw_channel) if isinstance(raw_channel, Mapping) else {}
+    raw_topic = existing.get("topic")
+    existing_topic = dict(raw_topic) if isinstance(raw_topic, Mapping) else {}
+    raw_automation = existing.get("automation")
+    existing_automation = dict(raw_automation) if isinstance(raw_automation, Mapping) else {}
     receipts[semantic_key(goal_id, "lark", "goal_topic_receipt", root_message_id)] = {
         "kind": "goal_topic",
         "message_id": root_message_id,
@@ -842,12 +849,12 @@ def connect_lark_goal_topic(
             "enabled": True,
             "target_ref": target_name,
             "channel": {
-                **dict(existing.get("channel") or {}),
+                **existing_channel,
                 "pinned_message_id": root_message_id,
             },
             "topic": {
-                **dict(existing.get("topic") or {}),
-                "name": (existing.get("topic") or {}).get("name", topic_name)
+                **existing_topic,
+                "name": existing_topic.get("name", topic_name)
                 if editing
                 else topic_name,
                 "root_message_id": root_message_id,
@@ -871,7 +878,7 @@ def connect_lark_goal_topic(
                 **({"inbox_config_ref": inbox_config_ref} if inbox_config_ref else {}),
             },
             **({"connector": connector_binding} if connector_binding else {}),
-            "automation": dict(existing.get("automation") or {}),
+            "automation": existing_automation,
             "receipts": receipts,
         },
     )
@@ -1075,11 +1082,8 @@ def list_lark_connections(
             history_permission_guidance = bot_group_history_permission_guidance(
                 str(identity.get("bot_app_id") or "")
             )
-            topic = (
-                binding.get("topic")
-                if isinstance(binding.get("topic"), Mapping)
-                else {}
-            )
+            raw_topic = binding.get("topic")
+            topic = raw_topic if isinstance(raw_topic, Mapping) else {}
             raw_routing = binding.get("routing")
             routing = raw_routing if isinstance(raw_routing, Mapping) else {}
             connector_status: dict[str, Any] | None = None
@@ -1105,9 +1109,10 @@ def list_lark_connections(
                 reply_mode = ReplyMode.TOPIC_REPLY.value
                 reply_ready = False
                 health_error_code = "invalid_routing_state"
+            raw_legacy_channel = binding.get("channel")
             legacy_root = (
-                binding.get("channel", {}).get("pinned_message_id")
-                if isinstance(binding.get("channel"), Mapping)
+                raw_legacy_channel.get("pinned_message_id")
+                if isinstance(raw_legacy_channel, Mapping)
                 else None
             )
             rows.append(
@@ -1223,16 +1228,10 @@ def decide_lark_topic_event(
                 if isinstance(target.get("identity"), Mapping)
                 else {}
             )
-            topic = (
-                binding.get("topic")
-                if isinstance(binding.get("topic"), Mapping)
-                else {}
-            )
-            binding_channel = (
-                binding.get("channel")
-                if isinstance(binding.get("channel"), Mapping)
-                else {}
-            )
+            raw_topic = binding.get("topic")
+            topic = raw_topic if isinstance(raw_topic, Mapping) else {}
+            raw_binding_channel = binding.get("channel")
+            binding_channel = raw_binding_channel if isinstance(raw_binding_channel, Mapping) else {}
             topic_root = str(
                 topic.get("root_message_id")
                 or binding_channel.get("pinned_message_id")

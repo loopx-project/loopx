@@ -45,10 +45,13 @@ from loopx.control_plane.quota.live_decision import (
 
 GOAL_ID = "report-goal"
 AGENT_ID = "report-agent"
+DEFAULT_FINISHED_UPDATED_AT = "2026-08-30T09:00:00Z"
 
 
-def _calendar_fixture(tmp_path):
-    registry, runtime = _fixture(tmp_path)
+def _calendar_fixture(
+    tmp_path: Path, *, finished_updated_at: str = DEFAULT_FINISHED_UPDATED_AT
+) -> tuple[Path, Path]:
+    registry, runtime = _fixture(tmp_path, finished_updated_at=finished_updated_at)
     for path in (runtime / "goals" / GOAL_ID / "post_writeback_hooks").glob("*.json"):
         path.unlink()
     _enable_calendar(registry)
@@ -62,6 +65,56 @@ def _enable_calendar(registry):
         "rrule": "FREQ=WEEKLY;BYDAY=FR;BYHOUR=18", "timezone": "Asia/Shanghai",
     }
     registry.write_text(json.dumps(config))
+
+
+@pytest.mark.parametrize(
+    ("due_at", "finished_at", "included"),
+    [
+        ("2026-09-11T10:00:00Z", "2026-09-11T09:59:59.999999Z", True),
+        ("2026-09-11T10:00:00Z", "2026-09-11T10:00:00Z", False),
+        ("2026-09-18T10:00:00Z", "2026-09-11T10:00:00Z", True),
+        ("2026-09-18T10:00:00Z", "2026-09-18T10:00:00.000001Z", False),
+    ],
+)
+def test_calendar_editorial_cli_includes_start_and_excludes_end(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    due_at: str,
+    finished_at: str,
+    included: bool,
+) -> None:
+    from datetime import datetime, timedelta
+
+    from loopx.capabilities.periodic_report.cadence_runtime import (
+        extend_cadence_turn_start_dispatch,
+    )
+    from loopx.cli import main
+
+    registry, runtime = _calendar_fixture(tmp_path, finished_updated_at=finished_at)
+    due = datetime.fromisoformat(due_at)
+    dispatch = extend_cadence_turn_start_dispatch(
+        {},
+        registry_path=registry,
+        runtime_root=runtime,
+        goal_id=GOAL_ID,
+        agent_id=AGENT_ID,
+        now=due,
+    )
+    assert dispatch["failures"] == []
+    assert main([
+        "--registry", str(registry), "--runtime-root", str(runtime), "--format", "json",
+        "periodic-report", "consume-pending", "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
+        "--execute",
+    ]) == 0
+    result = json.loads(capsys.readouterr().out)
+    assert result["status"] == "editorial_required"
+    assert result["external_writes_performed"] is False
+    editorial = json.loads(Path(result["editorial_request_path"]).read_text(encoding="utf-8"))
+    window = editorial["actual_work_window"]
+    assert datetime.fromisoformat(window["start_at"]) == due - timedelta(days=7)
+    assert window["end_at"] == due_at
+    completions = [fact["completed_at"] for fact in editorial["facts"] if fact["status"] == "done"]
+    assert completions == ([finished_at] if included else [])
 
 
 def test_calendar_actual_cli_preserves_capability_action_without_host(tmp_path, capsys, monkeypatch):
@@ -200,6 +253,37 @@ def test_calendar_hook_to_editorial_to_delivery_todo_preserves_window(tmp_path: 
     assert read_cadence_journal(runtime_root=runtime, goal_id=GOAL_ID)["publication"]["publication_id"] == "fixture-verified-publication"
 
 
+def test_calendar_route_can_switch_back_and_forth_in_one_window(tmp_path):
+    from datetime import datetime
+    from loopx.capabilities.periodic_report.cadence_journal import cadence_journal_path, read_cadence_journal
+    from loopx.capabilities.periodic_report.cadence_runtime import extend_cadence_turn_start_dispatch
+    from loopx.configure_goal import configure_goal
+
+    registry, runtime = _calendar_fixture(tmp_path)
+    config = json.loads(registry.read_text())["goals"][0]["control_plane"]["periodic_report"]
+    journal_path = cadence_journal_path(runtime, GOAL_ID)
+    now = datetime.fromisoformat("2026-09-11T10:00:00Z")
+    documents = []
+    for route in ("route-a", "route-b", "route-a", "route-b"):
+        configure_goal(registry_path=registry, goal_id=GOAL_ID,
+                       periodic_report_configuration={**config, "route_ref": route}, execute=True)
+        dispatch = extend_cadence_turn_start_dispatch({}, registry_path=registry, runtime_root=runtime,
+            goal_id=GOAL_ID, agent_id=AGENT_ID, now=now)
+        assert dispatch["failures"] == []
+        assert dispatch["results"][0]["agent_read_required"] is True
+        current = read_cadence_journal(runtime_root=runtime, goal_id=GOAL_ID)
+        if documents:
+            archive = journal_path.parent / "superseded-cadence" / f"{current['supersedes']}.json"
+            assert json.loads(archive.read_text()) == documents[-1]
+        documents.append(current)
+
+    assert documents[0]["window"] == documents[2]["window"]
+    assert documents[1]["window"] == documents[3]["window"]
+    assert len({entry["admitted_at"] for entry in documents}) == 1
+    assert len({entry["supersedes"] for entry in documents[1:]}) == 3
+    assert all(entry["publication"] is None for entry in documents)
+
+
 @pytest.mark.parametrize("prepared", [False, True])
 def test_calendar_reporter_replacement_uses_admitted_window_state(tmp_path, prepared):
     from datetime import datetime
@@ -230,7 +314,8 @@ def test_calendar_reporter_replacement_uses_admitted_window_state(tmp_path, prep
     else:
         assert result["error_code"] is None
         assert result["agent_read_required"] is True
-        assert current["supersedes"] == original["window"]["window_id"]
+        archive = runtime / "goals" / GOAL_ID / "periodic_reports/superseded-cadence" / f"{current['supersedes']}.json"
+        assert json.loads(archive.read_text()) == original
         assert current["window"]["agent_id"] == "replacement-peer"
         assert current["publication"] is None
 
@@ -484,7 +569,7 @@ def _intent() -> dict[str, object]:
 def _fixture(
     tmp_path: Path,
     *,
-    finished_updated_at: str = "2026-08-30T09:00:00Z",
+    finished_updated_at: str = DEFAULT_FINISHED_UPDATED_AT,
     provider: str = "file",
 ) -> tuple[Path, Path]:
     from tests.control_plane.canonical_authority_fixture import (
@@ -1953,6 +2038,98 @@ def test_consumption_derives_the_period_from_actual_report_facts(
         "end_at": "2026-08-30T09:00:00+00:00",
         "period_label": "2026-08-29 22:42 — 2026-08-30 17:00（北京时间）",
         "source": "agent_run_history_or_report_facts",
+    }
+
+
+def _simulate_missing_shanghai_timezone(monkeypatch: pytest.MonkeyPatch) -> None:
+    from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
+    def load_timezone(key: str) -> ZoneInfo:
+        if key == "Asia/Shanghai":
+            raise ZoneInfoNotFoundError(key)
+        return ZoneInfo(key)
+
+    monkeypatch.setattr("zoneinfo.ZoneInfo", load_timezone)
+
+
+def _read_editorial_cli_request(registry: Path, runtime: Path, capsys) -> dict:
+    from loopx.cli import main
+
+    code = main([
+        "--registry", str(registry), "--runtime-root", str(runtime), "--format", "json",
+        "periodic-report", "consume-pending", "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
+        "--execute",
+    ])
+    decision = json.loads(capsys.readouterr().out)
+    assert code == 0, decision
+    assert decision["status"] == "editorial_required"
+    assert decision["external_writes_performed"] is False
+    return json.loads(Path(decision["editorial_request_path"]).read_text(encoding="utf-8"))
+
+
+@pytest.mark.parametrize(
+    ("start_at", "completed_at", "missing_zone", "label"),
+    [
+        pytest.param(
+            "2026-08-29T14:42:26Z", "2026-08-30T09:00:00Z", True,
+            "2026-08-29 14:42 — 2026-08-30 09:00（UTC）", id="missing-display-zone",
+        ),
+        pytest.param(
+            "9999-12-31T15:59:59.999999Z", "9999-12-31T23:59:59.999999Z", False,
+            "9999-12-31 15:59 — 9999-12-31 23:59（UTC）", id="one-endpoint-overflows",
+        ),
+    ],
+)
+def test_editorial_cli_preserves_utc_work_window_when_local_display_fails(
+    tmp_path: Path, capsys, monkeypatch: pytest.MonkeyPatch,
+    start_at: str, completed_at: str, missing_zone: bool, label: str,
+) -> None:
+    registry, runtime = _fixture(tmp_path, finished_updated_at=start_at)
+    config = json.loads(registry.read_text(encoding="utf-8"))
+    config["goals"][0]["control_plane"]["periodic_report"]["timezone"] = "UTC"
+    registry.write_text(json.dumps(config), encoding="utf-8")
+    sidecar = next((runtime / "goals" / GOAL_ID / "post_writeback_hooks").glob("*.json"))
+    receipt = json.loads(sidecar.read_text(encoding="utf-8"))
+    receipt["intent"]["payload"]["stage_completion"]["completed_at"] = completed_at
+    receipt["recorded_at"] = completed_at
+    sidecar.write_text(json.dumps(receipt), encoding="utf-8")
+    if missing_zone:
+        _simulate_missing_shanghai_timezone(monkeypatch)
+
+    request = _read_editorial_cli_request(registry, runtime, capsys)
+    assert request["actual_work_window"] == {
+        "start_at": start_at.replace("Z", "+00:00"),
+        "end_at": completed_at.replace("Z", "+00:00"),
+        "period_label": label,
+        "source": "agent_run_history_or_report_facts",
+    }
+
+
+def test_calendar_editorial_cli_uses_schedule_zone_without_shanghai(
+    tmp_path: Path, capsys, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from datetime import datetime
+
+    from loopx.capabilities.periodic_report.cadence_runtime import extend_cadence_turn_start_dispatch
+
+    registry, runtime = _calendar_fixture(tmp_path)
+    config = json.loads(registry.read_text(encoding="utf-8"))
+    profile = config["goals"][0]["control_plane"]["periodic_report"]
+    profile["timezone"] = profile["schedule"]["timezone"] = "UTC"
+    registry.write_text(json.dumps(config), encoding="utf-8")
+    _simulate_missing_shanghai_timezone(monkeypatch)
+    dispatch = extend_cadence_turn_start_dispatch(
+        {}, registry_path=registry, runtime_root=runtime, goal_id=GOAL_ID,
+        agent_id=AGENT_ID, now=datetime.fromisoformat("2026-09-11T18:00:00Z"),
+    )
+    assert dispatch["failures"] == []
+
+    request = _read_editorial_cli_request(registry, runtime, capsys)
+    assert request["actual_work_window"] == {
+        "start_at": "2026-09-04T18:00:00Z",
+        "end_at": "2026-09-11T18:00:00Z",
+        "period_label": "2026-09-04 18:00 — 2026-09-11 18:00（UTC）",
+        "source": "frozen_calendar_window",
     }
 
 

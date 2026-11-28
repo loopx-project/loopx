@@ -304,6 +304,128 @@ def collect_deep_install_checks(
     )
 
 
+def collect_companion_distribution_diagnostics(
+    *,
+    runtime_identity: dict[str, Any] | None = None,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], str | None]:
+    """Inspect installed optional companion wheels for standalone loopx-core."""
+    from importlib.util import find_spec
+
+    if find_spec("loopx.cli") is not None:
+        return [], [], None
+    try:
+        installed = installed_loopx_distribution(distribution)
+    except PackageNotFoundError:
+        return [], [], None
+    if getattr(installed, "name", None) != "loopx-core":
+        return [], [], None
+    from .capabilities.agent_turn_recall.catalog_entry import inspect_agent_turn_recall_distribution
+    from .capabilities.benchmark_toolkit.catalog_entry import inspect_benchmark_toolkit_distribution
+    from .capabilities.deep_research.catalog_entry import inspect_research_workflow_distribution
+    from .capabilities.issue_fix.catalog_entry import inspect_issue_fix_workflow_distribution
+    from .capabilities.pr_review_queue.catalog_entry import inspect_pull_request_review_distribution
+    from .cli_runtime import inspect_workspace_distribution
+
+    inspectors = (
+        inspect_workspace_distribution,
+        inspect_benchmark_toolkit_distribution,
+        inspect_agent_turn_recall_distribution,
+        inspect_pull_request_review_distribution,
+        inspect_issue_fix_workflow_distribution,
+        inspect_research_workflow_distribution,
+    )
+    companions = [
+        item
+        for item in (inspect_fn(builtin_cli_present=False) for inspect_fn in inspectors)
+        if item["installed"]
+    ]
+    checks: list[dict[str, Any]] = []
+    fix_parts: list[str] = []
+    if companions:
+        failing = [item for item in companions if not item["ready"]]
+        if failing:
+            details: list[str] = []
+            for item in failing:
+                missing = [
+                    *item["missing_modules"],
+                    *item["missing_resources"],
+                    *item["unowned_modules"],
+                    *item["unowned_resources"],
+                ]
+                summary = (
+                    f"{item['distribution']}=={item['version']} "
+                    f"(core=={item['core_version']}): {','.join(item['reasons'])}"
+                )
+                if missing:
+                    summary += f" [{', '.join(missing)}]"
+                details.append(summary)
+                if item["core_version"]:
+                    fix_parts.append(
+                        f"Reinstall matching `{item['distribution']}=={item['core_version']}` "
+                        f"or uninstall `{item['distribution']}`."
+                    )
+                else:
+                    fix_parts.append(
+                        f"Reinstall matching `{item['distribution']}` or uninstall `{item['distribution']}`."
+                    )
+            checks.append(
+                {
+                    "id": "companion_distributions_compatible",
+                    "required": True,
+                    "ok": False,
+                    "detail": "; ".join(details),
+                }
+            )
+        else:
+            checks.append(
+                {
+                    "id": "companion_distributions_compatible",
+                    "required": True,
+                    "ok": True,
+                    "detail": "; ".join(
+                        f"{item['distribution']}=={item['version']} (core=={item['core_version']})"
+                        for item in companions
+                    ),
+                }
+            )
+    else:
+        checks.append(
+            {
+                "id": "companion_distributions_compatible",
+                "required": False,
+                "ok": True,
+                "applicable": False,
+                "detail": "no optional companion distributions installed",
+            }
+        )
+    if runtime_identity is not None and not runtime_identity.get("release_id"):
+        fingerprint = runtime_identity.get("package_fingerprint")
+        fingerprint_ok = isinstance(fingerprint, str) and fingerprint.startswith("sha256:")
+        checks.append(
+            {
+                "id": "package_runtime_fingerprint",
+                "required": True,
+                "ok": fingerprint_ok,
+                "detail": (
+                    str(fingerprint)
+                    if fingerprint_ok
+                    else "runtime fingerprint unavailable (version mismatch, missing recorded files, or unowned files in package tree)"
+                ),
+            }
+        )
+        if not fingerprint_ok and not fix_parts:
+            companion_names = ", ".join(f"`{item['distribution']}`" for item in companions)
+            if companion_names:
+                fix_parts.append(
+                    f"Repair or reinstall `loopx-core` and installed companions ({companion_names}) at the exact Core version."
+                )
+            else:
+                fix_parts.append(
+                    "Repair or reinstall `loopx-core` and any optional companion wheel at the exact Core version."
+                )
+    return companions, checks, " ".join(fix_parts) if fix_parts else None
+
+
 def collect_installation_doctor(*, deep: bool) -> dict[str, Any]:
     """Validate the package/toolchain without opening registered user projects.
 
@@ -320,20 +442,29 @@ def collect_installation_doctor(*, deep: bool) -> dict[str, Any]:
     package_root = Path(__file__).resolve().parents[1]
     selected = os.environ.get("LOOPX_RELEASE_ROOT")
     runtime = collect_effect_runtime_readiness(deep=deep)
+    runtime_identity = release_runtime_identity()
+    companions, companion_checks, companion_fix = collect_companion_distribution_diagnostics(
+        runtime_identity=runtime_identity,
+    )
     checks = [
         {"id": "command_available", "required": True, "ok": command is not None},
         {"id": "typescript_effect_runtime_ready", "required": True,
          "ok": bool(runtime.get("ready")), "detail": runtime.get("status")},
+        *companion_checks,
     ]
     payload: dict[str, Any] = {
         "mode": "deep" if deep else "standard",
         "scope": "installation_only",
-        "service_runtime_identity": release_runtime_identity(),
+        "service_runtime_identity": runtime_identity,
         "python": {"executable": sys.executable},
         "checks": checks,
         "typescript_control_plane": runtime,
         "path": {"loopx": str(command) if command else None},
     }
+    if companions:
+        payload["companion_distributions"] = companions
+    if companion_fix:
+        payload["fix"] = companion_fix
     if deep:
         candidate = collect_deep_install_checks(
             command_path=command,

@@ -52,6 +52,7 @@ import { parseTodoResumeCondition, todoResumeTransition } from "./todo-resume-co
 import { MarkdownText } from "./markdown";
 import { formatMonitorDate } from "./monitor-readback";
 import { parseTodoCompletionProof } from "./todo-completion-feedback";
+import { SourceRunHistory } from "./source-run-history";
 import { useDrawerOverlay } from "./workspace-shell";
 import {
   deriveGoalWorkerRoster,
@@ -94,45 +95,6 @@ function runRosterState(run: WorkspaceRun): WorkerRosterState {
     return "lease_expired";
   }
   return "waiting";
-}
-
-import { GoalStrategyDocument } from "./goal-source-strategies";
-
-function SourceRunHistory({ goal, heading = false }: { goal: WorkspaceGoal; heading?: boolean }) {
-  const { t, locale } = useWorkspaceI18n();
-  const history = goal.sourceRunHistory;
-  const recent = history?.recent ?? [];
-  const total = history?.total ?? null;
-  return <section className="personal-detail-card personal-source-run-history" aria-label={t("drawer.sourceRunHistory")}>
-    {heading ? <h3>{t("drawer.sourceRunHistory")}</h3> : null}
-    <small>{goal.sourceAccess?.label} · {t("common.readOnly")}</small>
-    <dl><div>
-      <dt>{t("drawer.sourceRunOriginalGoal")}</dt><dd><code>{goal.sourceAccess?.original_goal_id ?? goal.goalId}</code></dd>
-    </div></dl>
-    {recent.length ? <>
-      <p>{total === null ? t("drawer.sourceRunRecent", {shown: recent.length})
-        : t("drawer.sourceRunCount", {shown: recent.length, count: total})}</p>
-      <ol>{recent.map((run, index) => <li key={`${run.generated_at}:${run.turn_instance_id ?? ""}:${index}`}>
-        <details>
-          <summary><time dateTime={run.generated_at}>{run.generated_at}</time></summary>
-          <dl>
-            {run.classification ? <div><dt>{t("drawer.sourceRunRecordType")}</dt><dd>{run.classification}</dd></div> : null}
-            <div><dt>{t("drawer.sourceRunOriginalTurn")}</dt><dd>
-              {run.turn_instance_id ? <code>{run.turn_instance_id}</code> : t("drawer.sourceRunUnrecorded")}
-            </dd></div>
-            <div><dt>{t("drawer.sourceRunCheckpoint")}</dt><dd>
-              {run.vision_checkpoint ? <code>{run.vision_checkpoint.decision}</code> : t("drawer.sourceRunUnrecorded")}
-            </dd></div>
-          </dl>
-          {run.agent_vision ? <GoalStrategyDocument executionRecord value={run.agent_vision}
-            recordedAt={run.generated_at} agentId={run.agent_id ?? undefined} version={`${run.generated_at} · ${run.turn_instance_id ?? ""}`}
-            originalGoalId={goal.sourceAccess?.original_goal_id ?? goal.goalId}
-            namespace={goal.sourceAccess?.namespace ?? ""} zh={locale === "zh-CN"}/>
-            : <p>{t("drawer.sourceRunDecisionUnavailable")}</p>}
-        </details>
-      </li>)}</ol>
-    </> : <p>{t(total === 0 ? "drawer.noExecutionHistory" : "drawer.sourceRunUnavailable")}</p>}
-  </section>;
 }
 
 function subagentModelRequest(include: boolean, model: string, effort: string) {
@@ -357,14 +319,15 @@ export function ContextDrawer({ agents, attentionHistory = [], onSelectAttention
     }
   }, [authoritativeSubagentConfiguration, verifiedSubagentConfiguration]);
 
+  const openingControl = selection.kind === "goal" ? selection.openingControl : undefined;
   useEffect(() => {
-    const activeElement = document.activeElement;
-    if (activeElement instanceof HTMLElement && !drawerRef.current?.contains(activeElement)) {
-      returnFocusRef.current = activeElement;
+    const opener = openingControl ?? document.activeElement;
+    if (opener instanceof HTMLElement && !drawerRef.current?.contains(opener)) {
+      returnFocusRef.current = opener;
     }
     const frame = window.requestAnimationFrame(() => titleRef.current?.focus());
     return () => window.cancelAnimationFrame(frame);
-  }, [selectionIdentity]);
+  }, [openingControl, selectionIdentity]);
 
   useEffect(() => {
     if (!taskInspectorModal || drawerRef.current?.contains(document.activeElement)) return;

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Iterable, Mapping, Sequence
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 
 from ...rollout_event_log import ROLLOUT_EVENT_SCHEMA_VERSION
@@ -67,7 +67,8 @@ def _safe_durable_event(
     if kind not in {"todo_complete", "refresh_state", "quota_should_run"}:
         return None
     recorded_at = _timestamp(event.get("recorded_at"), f"{label}.recorded_at")
-    if not window_start <= _parsed_timestamp(recorded_at) <= window_end:
+    recorded_time = _parsed_timestamp(recorded_at)
+    if not window_start <= recorded_time <= window_end:
         return None
     event_id = _text(event.get("event_id"), f"{label}.event_id", maximum=128)
     boundary = _object(event.get("boundary"), f"{label}.boundary")
@@ -136,6 +137,7 @@ def _safe_durable_event(
         "event_id": event_id,
         "event_kind": kind,
         "recorded_at": recorded_at,
+        "recorded_time": recorded_time,
         "todo_id": str(event.get("todo_id") or "").strip() or None,
         "replan_recorded": details.get("autonomous_replan_recorded") is True,
         "stage_completion": stage_completion,
@@ -196,8 +198,8 @@ def build_periodic_report_runtime_trigger_decision(
         raise ValueError("segment.start_at must be earlier than segment.end_at")
     if end_at != evaluated_at:
         raise ValueError("segment.end_at must match evaluated_at")
-    duration = int((window_end - window_start).total_seconds())
-    if duration > int(aggregation["window_seconds"]):
+    window_limit = timedelta(seconds=int(aggregation["window_seconds"]))
+    if window_end - window_start > window_limit:
         raise ValueError("segment window exceeds trigger_policy.aggregation.window_seconds")
     remaining_todo_count = _integer(
         segment.get("remaining_todo_count"),
@@ -231,7 +233,7 @@ def build_periodic_report_runtime_trigger_decision(
             continue
         seen_event_ids.add(event_id)
         relevant.append(event)
-    relevant.sort(key=lambda item: (item["recorded_at"], item["event_id"]))
+    relevant.sort(key=lambda item: (item["recorded_time"], item["event_id"]))
 
     completions: list[dict[str, Any]] = []
     seen_completion_keys: set[str] = set()
@@ -265,7 +267,7 @@ def build_periodic_report_runtime_trigger_decision(
         completions_at_boundary = [
             event
             for event in completions
-            if event["recorded_at"] <= boundary_event["recorded_at"]
+            if event["recorded_time"] <= boundary_event["recorded_time"]
         ]
         transition = "segment_completed"
         contributing = [boundary_event]

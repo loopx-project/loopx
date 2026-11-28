@@ -335,7 +335,7 @@ def register_todo_command(
         type=int,
         help=(
             "For todo claim, optional lease TTL in seconds (1..86400; default "
-            "2700 = 45m). Pass a higher TTL on claim for long (>45m) execution "
+            "10800 = 3h). Pass a higher TTL on claim for long (>3h) execution "
             "wakes, or renew via `task-lease renew` before expiry."
         ),
     )

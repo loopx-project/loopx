@@ -7,12 +7,14 @@ from typing import Any
 from ...control_plane.digest_envelope import sha256_envelope
 from ...control_plane.runtime.public_safety import public_safe_compact_text
 from ..context_providers.base import ContextProvider
+from .catalog_entry import (
+    AGENT_TURN_RECALL_SCHEMA_VERSION as AGENT_TURN_RECALL_SCHEMA_VERSION,
+    AGENT_TURN_RECALL_SURFACE_ID as AGENT_TURN_RECALL_SURFACE_ID,
+)
 
 
 AGENT_TURN_SITUATION_SCHEMA_VERSION = "agent_turn_situation_v0"
 AGENT_TURN_RECALL_CONTEXT_SCHEMA_VERSION = "agent_turn_recall_context_v0"
-AGENT_TURN_RECALL_SCHEMA_VERSION = "agent_turn_recall_v0"
-AGENT_TURN_RECALL_SURFACE_ID = "agent_workflow.turn_admission"
 MAX_RECENT_OUTCOMES = 3
 
 

@@ -262,7 +262,10 @@ def receipt_bound_replan_source_acks(
         if stamp is None or stamp >= cutoff:
             continue
         ack = compact_autonomous_replan_ack(row)
-        obligation_id = ((ack or {}).get("semantic_delta") or {}).get("obligation_id")
+        semantic_delta = ack.get("semantic_delta") if isinstance(ack, dict) else None
+        obligation_id = (
+            semantic_delta.get("obligation_id") if isinstance(semantic_delta, dict) else None
+        )
         if isinstance(obligation_id, str) and obligation_id not in seen:
             seen.add(obligation_id)
             candidates.append(ack)

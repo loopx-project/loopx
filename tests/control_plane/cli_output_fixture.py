@@ -46,6 +46,46 @@ def budget_fixture_path(root: Path) -> Path:
     return Path("/tmp") / f"loopx-cli-budget-{suffix}"
 
 
+_ISOLATED_HOST_CLEARED_ENV_KEYS = (
+    "CODEX_HOME",
+    "ANTIGRAVITY_CONVERSATION_ID",
+    "LOOPX_CHAT_CODEX_MODEL_PROVIDER",
+    "GH_CONFIG_DIR",
+    "GH_TOKEN",
+    "GITHUB_TOKEN",
+    "GITHUB_ENTERPRISE_TOKEN",
+    "GH_ENTERPRISE_TOKEN",
+    "CODEX_SANDBOX_NETWORK_DISABLED",
+    "LOOPX_OFFLINE",
+    "LOOPX_AUTO_CAPABILITY_PROBE",
+)
+
+
+@contextlib.contextmanager
+def isolated_probe_host_env(home: Path):
+    """Prevent host-level auth/context env (e.g. gh hosts/tokens) from mutating isolated public fixtures."""
+    home.mkdir(parents=True, exist_ok=True)
+    managed = {
+        "HOME": str(home),
+        "USERPROFILE": str(home),
+        "XDG_CONFIG_HOME": str(home / ".config"),
+        "APPDATA": str(home / "AppData" / "Roaming"),
+    }
+    tracked_keys = (*managed.keys(), *_ISOLATED_HOST_CLEARED_ENV_KEYS)
+    previous = {key: os.environ.get(key) for key in tracked_keys}
+    os.environ.update(managed)
+    for key in _ISOLATED_HOST_CLEARED_ENV_KEYS:
+        os.environ.pop(key, None)
+    try:
+        yield
+    finally:
+        for key, value in previous.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+
+
 @contextlib.contextmanager
 def stable_budget_fixture_root(root: Path):
     fixture = budget_fixture_path(root)

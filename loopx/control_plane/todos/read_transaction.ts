@@ -6,16 +6,23 @@ import {readCanonicalSnapshot} from "../coordination/canonical_snapshot_page.ts"
 import {readLocalCoordinationTodoSource} from "../coordination/local_authority_read.ts";
 import {LOCAL_COORDINATION_TODO_SNAPSHOT_PAGE_REQUEST_SCHEMA,
   LOCAL_COORDINATION_TODO_LIST_RESULT_SCHEMA} from "../coordination/coordination_state_contract.generated.ts";
-import {projectCompletionEvidence, projectCanonicalTodoFields, selectTodoReadFields, projectTodoReadGroup, TODO_READ_RESULT} from "./read_projection.ts";
+import {includeTodoAcceptance, projectCompletionEvidence, projectCanonicalTodoFields, selectTodoReadFields, projectTodoReadGroup, TODO_READ_RESULT} from "./read_projection.ts";
 import {id, canonicalTodoReadItems, structureCanonicalTodo} from "./read_codec.ts";
 import {compactTodoReadSummary, compactThinTodoRead, compactTodoQueueSummary, todoReadProjectionContract} from "./read_presentation.ts";
 import {projectTodoContextPage, SUMMARY_SOURCES, PLANNING_SOURCES} from "./context_projection.ts";
 import {SOURCE_KEYS as RESUME_SOURCES} from "./resume_planning.ts";
 import {sealProjectionEnvelope, PROJECTION_ENVELOPE_SEAL_REQUEST} from "../projection_envelope.ts";
-import {canonicalAuthoritySha256, canonicalAuthorityJson} from "../coordination/authority_store_codec.ts";
+import {canonicalAuthoritySha256, canonicalAuthorityJson, requireAuthorityStoreId} from "../coordination/authority_store_codec.ts";
 import {decodeTodoReadSource} from "./read_codec.ts";
 import {projectTodoQuotaPlanning} from "./quota_selection.ts";
-import type {LocalAuthorityProviderDependencies} from "../coordination/local_authority_provider.ts";
+import {authorityStoreSourceAuthority as sourceAuthorityFor, readAuthoritySnapshot} from "../coordination/authority_store.ts";
+import {canonicalAuthorityRouteFailure, requireCanonicalAuthority} from "../coordination/local_authority_write.ts";
+import {localAuthorityOpenFailure, openRuntimeAuthorityStore as openRuntimeStore,
+  requireLocalAuthorityRuntimeRoot as runtimeRoot,
+  type LocalAuthorityProviderDependencies} from "../coordination/local_authority_provider.ts";
+import {goalRolloutEventLogPath} from "../rollout_receipt_log.ts";
+import {isReceiptLogStat, receiptLogStatsEqual, statReceiptLog, type ReceiptLogStat} from "../runtime/receipt_log_snapshot.ts";
+import type {RolloutLogReadWitness} from "./resume_condition.ts";
 
 const includesArchivedRows = (query: JsonObject): boolean =>
   query.read_scope === "completed_history" || query.include_archived === true;
@@ -38,9 +45,15 @@ export async function readCanonicalTodoProjection(input: JsonObject, dependencie
   const query = requireJsonObject(input.query ?? {}, "Todo query");
   const includeArchived = includesArchivedRows(query);
   const retained = query.read_scope === "completed_history";
+  const expectedLogPath = (typeof source.runtime_root === "string" && typeof source.goal_id === "string")
+    ? goalRolloutEventLogPath(source.runtime_root, source.goal_id)
+    : null;
+  const preProjectionStat = expectedLogPath !== null ? await statReceiptLog(expectedLogPath) : undefined;
+  const rolloutReads: RolloutLogReadWitness[] = [];
   let projected = await projectCanonicalTodoFields({...input, todos, retained, include_archived: includeArchived,
     goal_acceptance_contract: canonical.goal_acceptance_contract ?? null,
-    goal_acceptance_work_guards: guards});
+    goal_acceptance_work_guards: guards},
+    {onRolloutLogRead: witness => rolloutReads.push(witness)});
   if (input.read_pipeline !== undefined) {
     if (input.kind !== "canonical_fields" || input.query != null || !Array.isArray(input.read_pipeline) || !input.read_pipeline.length) {
       throw new EffectRuntimeRequestError("Todo select pipeline requires a complete canonical read");
@@ -77,10 +90,25 @@ export async function readCanonicalTodoProjection(input: JsonObject, dependencie
       const {canonical_contract_fields: _contractFields, read_observed_at: _readObserved, ...replayRead} = input;
       replay = {replay_read: replayRead};
     }
+    let rolloutLogStat: ReceiptLogStat | undefined;
+    if (projected.fields && !projected.rejection && expectedLogPath !== null) {
+      const postProjectionStat = await statReceiptLog(expectedLogPath);
+      if (rolloutReads.length > 0) {
+        if (rolloutReads.every(witness =>
+          witness.stable && witness.logPath === expectedLogPath &&
+          receiptLogStatsEqual(witness.stat, postProjectionStat)
+        )) {
+          rolloutLogStat = rolloutReads[0]!.stat;
+        }
+      } else if (preProjectionStat !== undefined && receiptLogStatsEqual(preProjectionStat, postProjectionStat)) {
+        rolloutLogStat = preProjectionStat;
+      }
+    }
     return {
       ...(input.return_projection === true && projected.projection
         ? {schema_version: TODO_READ_RESULT, projection: projected.projection, field_evaluations: projected.field_evaluations}
         : {...projected, canonical: canonicalResult}),
+      ...(rolloutLogStat !== undefined ? {rollout_log_stat: rolloutLogStat} : {}),
       ...(projected.fields && !projected.rejection ? {source_projection: {source_row_fields: [...canonicalSourceRows],
         source: Object.fromEntries(["source_authority", "store_identity", "provider_revision", "cursor"].map(key => [key, canonical[key]])),
         ...replay, field_digests: Object.fromEntries(Object.entries(requireJsonObject(projected.fields, "Todo fields"))
@@ -92,7 +120,7 @@ export async function readCanonicalTodoProjection(input: JsonObject, dependencie
 function validateCanonicalSource(canonical: JsonObject, expected: JsonObject): void {
   if (canonical.status !== "loaded" || Object.keys(expected).length !== 4 ||
       ["source_authority", "store_identity", "provider_revision", "cursor"].some(field => expected[field] !== canonical[field])) {
-    throw new EffectRuntimeRequestError("quota canonical source changed; restart the complete guarded read");
+    throw new EffectRuntimeRequestError("quota canonical source changed; restart the complete guarded read", "quota_canonical_source_changed");
   }
 }
 
@@ -105,7 +133,7 @@ function resolveCanonicalSource(fields: JsonObject, reference: JsonObject, expec
   }
   const field = requireJsonObject(fields[reference.field], "quota source field");
   if ((fieldDigests?.[reference.field] ?? canonicalAuthoritySha256(field)) !== reference.field_sha256) {
-    throw new EffectRuntimeRequestError("quota source projection no longer matches the original complete read");
+    throw new EffectRuntimeRequestError("quota source projection no longer matches the original complete read", "quota_canonical_source_changed");
   }
   const record = JSON.parse(JSON.stringify(field)) as JsonObject;
   if (!Array.isArray(reference.changes)) throw new EffectRuntimeRequestError("quota source changes must be an array");
@@ -153,6 +181,140 @@ function resolveCanonicalSource(fields: JsonObject, reference: JsonObject, expec
     throw new EffectRuntimeRequestError("canonical Todo scalar facts cannot be replaced by caller source differences");
   }
   return decodeTodoReadSource({record, python_values: reference.python_values ?? []});
+}
+
+const EXPECTED_WITNESS_FIELDS = ["source_authority", "provider_revision", "cursor"] as const;
+
+async function loadCanonicalAuthorityHeadWitness(
+  rawRuntimeRoot: unknown,
+  rawGoalId: unknown,
+  dependencies: LocalAuthorityProviderDependencies = {},
+): Promise<{ok: true; goalId: string; head: JsonObject} | {ok: false; canonical: JsonObject}> {
+  let sourceAuthority = "file_v0";
+  try {
+    const root = runtimeRoot(rawRuntimeRoot);
+    const goalId = requireAuthorityStoreId(rawGoalId, "goal id");
+    await requireCanonicalAuthority(root, goalId, "todo_read");
+    const store = await openRuntimeStore(root, goalId, dependencies);
+    sourceAuthority = sourceAuthorityFor(store);
+    const {identity, authority} = await readAuthoritySnapshot(store);
+    if (identity.status !== "available") {
+      return {ok: false, canonical: {
+        ...identity, schema_version: LOCAL_COORDINATION_TODO_LIST_RESULT_SCHEMA,
+        source_authority: sourceAuthority, decision_read_from_provider: true, legacy_fallback_used: false}};
+    }
+    if (authority.status !== "loaded") {
+      return {ok: false, canonical: {
+        ...authority, schema_version: LOCAL_COORDINATION_TODO_LIST_RESULT_SCHEMA,
+        source_authority: sourceAuthority, decision_read_from_provider: true, legacy_fallback_used: false}};
+    }
+    return {
+      ok: true,
+      goalId,
+      head: {
+        status: "loaded",
+        source_authority: sourceAuthority,
+        store_identity: identity.store_identity,
+        provider_revision: authority.provider_revision,
+        cursor: authority.cursor,
+      },
+    };
+  } catch (error) {
+    if (error instanceof EffectRuntimeRequestError) throw error;
+    return {ok: false, canonical: {
+      schema_version: LOCAL_COORDINATION_TODO_LIST_RESULT_SCHEMA,
+      status: "failed",
+      reason_code: "canonical_snapshot_unavailable",
+      reason: error instanceof Error ? error.message : "invalid authority check",
+      source_authority: sourceAuthority,
+      decision_read_from_provider: true,
+      legacy_fallback_used: false,
+      ...localAuthorityOpenFailure(error),
+      ...canonicalAuthorityRouteFailure(error)}};
+  }
+}
+
+/** Verify whether the live canonical Todo head revision and cursor match a previously captured witness. */
+export async function verifyCanonicalTodoAuthorityWitness(
+  value: unknown,
+  dependencies: LocalAuthorityProviderDependencies = {},
+): Promise<JsonObject> {
+  const input = requireJsonObject(value, "Todo authority witness verification");
+  if (input.schema_version !== "todo_authority_head_verify_v0") {
+    throw new EffectRuntimeRequestError("Todo authority witness schema mismatch");
+  }
+  const rawExpected = input.expected_witness;
+  if (typeof rawExpected !== "object" || rawExpected === null || Array.isArray(rawExpected)) {
+    return {schema_version: "todo_authority_head_verify_result_v0", fresh: false, reason_code: "expected_witness_incomplete"};
+  }
+  const expected = rawExpected as JsonObject;
+  if (!EXPECTED_WITNESS_FIELDS.every(key => typeof expected[key] === "string" && (expected[key] as string).trim() !== "")) {
+    return {schema_version: "todo_authority_head_verify_result_v0", fresh: false, reason_code: "expected_witness_incomplete"};
+  }
+  try {
+    const live = await loadCanonicalAuthorityHeadWitness(input.runtime_root, input.goal_id, dependencies);
+    if (!live.ok) {
+      return {schema_version: "todo_authority_head_verify_result_v0", fresh: false, reason_code: String(live.canonical.reason_code ?? "canonical_head_unavailable")};
+    }
+    const matches = EXPECTED_WITNESS_FIELDS.every(key => live.head[key] === expected[key]) &&
+      (expected.store_identity === undefined || live.head.store_identity === expected.store_identity);
+    return {
+      schema_version: "todo_authority_head_verify_result_v0",
+      fresh: matches,
+      reason_code: matches ? "matched" : "canonical_witness_drifted",
+      source_authority: live.head.source_authority,
+      provider_revision: live.head.provider_revision,
+      cursor: live.head.cursor,
+    };
+  } catch {
+    return {schema_version: "todo_authority_head_verify_result_v0", fresh: false, reason_code: "canonical_witness_check_failed"};
+  }
+}
+
+/** Batch quota planning from already-loaded canonical summaries after checking
+ * the live authority head and rollout log stat against mutation/unavailability. */
+export async function projectCanonicalQuotaBatch(
+  value: unknown,
+  dependencies: LocalAuthorityProviderDependencies = {},
+): Promise<JsonObject> {
+  const input = requireJsonObject(value, "quota planning batch");
+  if (input.schema_version !== "todo_quota_planning_batch_v0") {
+    throw new EffectRuntimeRequestError("quota planning batch schema mismatch");
+  }
+  if (!Array.isArray(input.requests) || !input.requests.length || input.requests.length > 2) {
+    throw new EffectRuntimeRequestError("quota planning batch requires one or two requests");
+  }
+  if (!Array.isArray(input.authority_checks) || !input.authority_checks.length || input.authority_checks.length > 2) {
+    throw new EffectRuntimeRequestError("quota planning batch requires explicit authority checks");
+  }
+  const verified = new Set<string>();
+  for (const rawCheck of input.authority_checks) {
+    const check = requireJsonObject(rawCheck, "quota authority check");
+    const read = requireJsonObject(check.read, "quota source read");
+    if (read.kind !== "canonical_fields" || read.query != null || read.canonical_contract_fields !== undefined) {
+      throw new EffectRuntimeRequestError("quota source requires the original complete canonical read");
+    }
+    const source = requireJsonObject(read.source, "quota source");
+    const expected = requireJsonObject(check.expected_source, "quota source identity");
+    const dedupeKey = JSON.stringify(canonicalAuthorityJson({
+      runtime_root: source.runtime_root, goal_id: source.goal_id, expected,
+      rollout_log_stat: check.rollout_log_stat ?? null,
+    }));
+    if (verified.has(dedupeKey)) continue;
+    const live = await loadCanonicalAuthorityHeadWitness(source.runtime_root, source.goal_id, dependencies);
+    if (!live.ok) return {schema_version: TODO_READ_RESULT, canonical: live.canonical};
+    validateCanonicalSource(live.head, expected);
+    if (!isReceiptLogStat(check.rollout_log_stat)) {
+      throw new EffectRuntimeRequestError("quota canonical source changed; restart the complete guarded read", "quota_canonical_source_changed");
+    }
+    const currentStat = await statReceiptLog(goalRolloutEventLogPath(String(source.runtime_root), live.goalId));
+    if (!receiptLogStatsEqual(currentStat, check.rollout_log_stat)) {
+      throw new EffectRuntimeRequestError("quota canonical source changed; restart the complete guarded read", "quota_canonical_source_changed");
+    }
+    verified.add(dedupeKey);
+  }
+  const wires = input.requests.map(request => projectTodoQuotaPlanning(request));
+  return {schema_version: "todo_quota_planning_batch_result_v0", quota_wires: wires};
 }
 
 /** Resolve complete source differences against one freshly validated provider
@@ -227,6 +389,8 @@ const originalRecords = (value: unknown): JsonObject[] => Array.isArray(value) ?
  * Reuse full collection validation; only the fields used by preparation cross
  * the caller boundary. This read acquires no lease and grants no readiness. */
 export async function readExecutionPreparationSource(input: JsonObject, dependencies: LocalAuthorityProviderDependencies = {}): Promise<JsonObject> {
+  const takeover = input.include_takeover_basis === undefined ? false
+    : requireBoolean(input.include_takeover_basis, "include_takeover_basis");
   const source = requireJsonObject(input.source, "execution preparation source");
   const goalId = requireNonEmptyString(source.goal_id, "goal_id");
   const todoId = id(input.todo_id);
@@ -239,14 +403,18 @@ export async function readExecutionPreparationSource(input: JsonObject, dependen
   const todo = originalRecords(canonical.todos).find(row => row.todo_id === todoId);
   if (!todo) return unavailable;
   const leases = originalRecords(canonical.leases).filter(row => row.todo_id === todoId)
-    .map(({todo_id, schema_version, status, owner, expires_at, idempotency_key, version, lease_epoch}) =>
-      ({todo_id, schema_version, status, owner, expires_at, idempotency_key, version, lease_epoch}));
+    .map(({todo_id, schema_version, status, owner, acquired_at, updated_at, expires_at,
+      idempotency_key, version, lease_epoch, write_repository}) =>
+      ({todo_id, schema_version, status, owner, expires_at, idempotency_key, version, lease_epoch,
+        ...(takeover ? {acquired_at, updated_at, write_repository} : {})}));
   return {schema_version: TODO_READ_RESULT, execution_preparation_source: {
     goal_id: goalId, todo_id: todoId, handoff_mode: canonical.handoff_mode,
     source_authority: canonical.source_authority, provider_revision: canonical.provider_revision,
     decision_read_from_provider: canonical.decision_read_from_provider,
     legacy_fallback_used: canonical.legacy_fallback_used,
     todo: {todo_id: todoId, status: todo.status, claimed_by: todo.claimed_by}, leases,
+    ...(takeover ? {takeover_basis: {todo,
+      acceptance_sha256: canonicalAuthoritySha256(canonical.goal_acceptance_contract ?? null)}} : {}),
   }};
 }
 
@@ -365,7 +533,8 @@ async function todoListPayload(input: JsonObject, original: JsonObject[], fields
     coverage: {scope: "goal_todo_query", expected_count: projection.uncapped_todo_count,
       included_count: projection.uncapped_todo_count, shown_count: shownCount,
       available_count: projection.uncapped_todo_count, omitted: []}});
-  const completeSource = !query.role && !query.status && !query.todo_id && !query.agent_id && query.limit == null &&
+  const includeAcceptance = includeTodoAcceptance(input, query);
+  const completeSource = includeAcceptance && !query.role && !query.status && !query.todo_id && !query.agent_id && query.limit == null &&
     !query.thin && !query.json_references && !summary && !fullText && !includeArchived;
   const sourceFields = requireJsonObject(fields.fields, "canonical Todo fields");
   const sourceIdentity = Object.fromEntries(["source_authority", "store_identity", "provider_revision", "cursor"].map(key => [key, canonical[key]]));
@@ -378,7 +547,7 @@ async function todoListPayload(input: JsonObject, original: JsonObject[], fields
           {field, field_sha256: canonicalAuthoritySha256(sourceFields[field]), changes: [], python_values: []}])),
         selector: {roles, status: null, todo_id: null, agent_id: null, limit: null, source_name: sourceName,
           observed_at: input.observed_at, evaluated_at: input.evaluated_at}}]}}} : {}),
-    ...(canonical.goal_acceptance_oracle_observation_basis ? {canonical_acceptance: {
+    ...(includeAcceptance && canonical.goal_acceptance_oracle_observation_basis ? {canonical_acceptance: {
       goal_acceptance_contract: canonical.goal_acceptance_contract,
       goal_acceptance_oracle_observation_basis: canonical.goal_acceptance_oracle_observation_basis,
     }} : {})};

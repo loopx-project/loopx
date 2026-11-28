@@ -15,7 +15,7 @@
 
 [English](STATUS.md) 与本文互为语义镜像。
 
-## 已接受 (53)
+## 已接受 (55)
 
 | RFC | 头部状态 | 替代 / 关闭 | Ledger |
 | --- | --- | --- | --- |
@@ -62,6 +62,7 @@
 | [RFC：结果后记忆效用归因 v0](post-outcome-memory-utility-attribution-v0.zh-CN.md) | 已接受 | 无 | — |
 | [RFC：Provider 在效果接受点执行授权（v0）](provider-effect-acceptance-v0.zh-CN.md) | 已接受 | 无 | — |
 | [RFC：Provider-Neutral Post-Writeback Capability Hooks v0](provider-neutral-post-writeback-capability-hooks-v0.zh-CN.md) | 已接受 | 无 | — |
+| [RFC：面向模型与沙箱双中立的快照与分叉 SPI（v0）](provider-neutral-sandbox-snapshot-fork-spi-v0.zh-CN.md) | 已接受 | 无 | — |
 | [RFC: Provider-Neutral Turn-Start Inbox Hook v0](provider-neutral-turn-start-inbox-hook-v0.md) | 已接受 | none | — |
 | [RFC：研究型探索控制面 v0](research-exploration-control-plane-v0.zh-CN.md) | 已接受 | 无 | — |
 | [回滚全程保留所选运行目录](self-update-explicit-runtime-route-v0.zh-CN.md) | 已接受 | 无 | — |
@@ -72,6 +73,7 @@
 | [RFC: Single-Owner Local Daemon (v0)](single-owner-local-daemon-v0.md) | 已接受 | none | — |
 | [RFC：Target、Yardstick 与 Stride 联合决策（v0）](target-yardstick-stride-decisions-v0.zh-CN.md) | 已接受 | none | — |
 | [RFC：LoopX 控制面 TypeScript 渐进迁移方向 v0](typescript-control-plane-migration-v0.zh-CN.md) | 已接受 | 无 | [27 条](ledger/typescript-control-plane-migration-v0/) |
+| [RFC：面向独立验证的 Hook 协同契约（v0）](verifier-hook-co-design-v0.zh-CN.md) | 已接受 | 无 | — |
 
 ## 已被替代 (1)
 

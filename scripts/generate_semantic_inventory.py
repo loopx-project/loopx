@@ -14,6 +14,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+from collections.abc import Mapping
 import json
 from pathlib import Path
 import sys
@@ -54,7 +55,34 @@ def load_semantic_registry(path: Path) -> dict:
     return payload
 
 
-def print_merge_candidates(inventory: dict) -> None:
+def format_merge_candidates(
+    inventory: Mapping[str, object],
+    registry: Mapping[str, object] | None = None,
+) -> list[str]:
+    active_registry = (
+        load_semantic_registry(ROOT / REGISTRY_RELATIVE)
+        if registry is None
+        else registry
+    )
+    groups = merge_candidate_groups(inventory, active_registry)
+    raw = len(merge_candidate_groups(inventory))
+    lines = [
+        f"merge candidates (advisory, never auto-merged): {len(groups)} to review, "
+        f"{raw - len(groups)} explained by a registered vocabulary's own owner symbols, "
+        f"{raw} raw groups"
+    ]
+    for group in sorted(groups, key=lambda item: (not item["cross_runtime"], item["names"])):
+        scope = "cross-runtime" if group["cross_runtime"] else "python-only"
+        lines.append(f"  [{scope}] {', '.join(group['names'])}")
+        lines.append(f"      values:  {', '.join(group['values'])}")
+        lines.append(f"      modules: {', '.join(group['modules'])}")
+    return lines
+
+
+def print_merge_candidates(
+    inventory: dict,
+    registry: Mapping[str, object] | None = None,
+) -> None:
     """Print the merge candidates the registry does not already explain.
 
     Advisory, like the ranking above it: an equal value set is a question for a
@@ -65,19 +93,8 @@ def print_merge_candidates(inventory: dict) -> None:
     whose modules span both runtimes is a registry gap: the same value set
     lives in two runtimes with no vocabulary binding them.
     """
-    registry = json.loads((ROOT / REGISTRY_RELATIVE).read_text(encoding="utf-8"))
-    groups = merge_candidate_groups(inventory, registry)
-    raw = len(merge_candidate_groups(inventory))
-    print(
-        f"merge candidates (advisory, never auto-merged): {len(groups)} to review, "
-        f"{raw - len(groups)} explained by a registered vocabulary's own owner symbols, "
-        f"{raw} raw groups"
-    )
-    for group in sorted(groups, key=lambda item: (not item["cross_runtime"], item["names"])):
-        scope = "cross-runtime" if group["cross_runtime"] else "python-only"
-        print(f"  [{scope}] {', '.join(group['names'])}")
-        print(f"      values:  {', '.join(group['values'])}")
-        print(f"      modules: {', '.join(group['modules'])}")
+    for line in format_merge_candidates(inventory, registry):
+        print(line)
 
 
 def main() -> int:
@@ -137,26 +154,40 @@ def main() -> int:
     inventory = build_inventory(ROOT)
     content = render_inventory(inventory)
     if args.report:
-        rows = consumer_ranking(inventory, load_sources(ROOT))[: args.top]
+        try:
+            registry = load_semantic_registry(ROOT / REGISTRY_RELATIVE)
+            sources = load_sources(ROOT)
+            rows = consumer_ranking(inventory, sources)[: args.top]
+            divergent = divergent_value_sets(inventory)[: args.top]
+            merge_lines = format_merge_candidates(inventory, registry)
+            evidence_lines = (
+                # Off by default: the per-site scan costs seconds on the full tree,
+                # and the ranking above answers the cheaper question. Nothing here
+                # gates anything, so a reviewer opts in when they want the roles.
+                render_consumer_evidence(
+                    collect_consumer_evidence(ROOT, registry, sources),
+                    top=args.top,
+                )
+                if args.consumer_evidence
+                else None
+            )
+        except (DevelopmentProbeError, ValueError) as error:
+            print(f"semantic report failed: {error}", file=sys.stderr)
+            return 1
         width = max((len(row["name"]) for row in rows), default=0)
         print("external_consumer_modules  values  name  module")
         for row in rows:
             print(f"{row['external_consumer_modules']:>25}  {row['values']:>6}  {row['name']:<{width}}  {row['module']}")
-        divergent = divergent_value_sets(inventory)[: args.top]
         print()
         print("value_sets  name  definition_modules")
-        for row in divergent:
-            print(f"{row['value_sets']:>10}  {row['name']}  {', '.join(row['definition_modules'])}")
+        for entry in divergent:
+            print(f"{entry['value_sets']:>10}  {entry['name']}  {', '.join(entry['definition_modules'])}")
         print()
-        print_merge_candidates(inventory)
-        if args.consumer_evidence:
-            # Off by default: the per-site scan costs seconds on the full tree,
-            # and the ranking above answers the cheaper question. Nothing here
-            # gates anything, so a reviewer opts in when they want the roles.
+        for line in merge_lines:
+            print(line)
+        if evidence_lines is not None:
             print()
-            registry = json.loads((ROOT / REGISTRY_RELATIVE).read_text(encoding="utf-8"))
-            evidence = collect_consumer_evidence(ROOT, registry, load_sources(ROOT))
-            print("\n".join(render_consumer_evidence(evidence, top=args.top)))
+            print("\n".join(evidence_lines))
         return 0
     if args.output is None:
         print(content, end="")

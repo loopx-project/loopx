@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 import json
 import sys
 import tempfile
@@ -27,7 +28,7 @@ from loopx.status import (  # noqa: E402
 LOCAL_PATH_FIXTURE = "/" + "private" + "/tmp/raw-run.log"
 
 
-def assert_no_raw_values(payload: dict[str, object]) -> None:
+def assert_no_raw_values(payload: Mapping[str, object]) -> None:
     text = json.dumps(payload, sort_keys=True)
     forbidden_values = (
         LOCAL_PATH_FIXTURE,

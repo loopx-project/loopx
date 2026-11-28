@@ -1926,7 +1926,9 @@ def test_missed_report_keeps_failed_turn_and_returns_only_the_latest_window(
     assert done["loopx_request"]["todo_id"] != original["loopx_request"]["todo_id"]
     assert done["loopx_request"]["report_window_id"] == latest["window_id"]
     assert "report_quota_recovery" not in done["loopx_request"]
-    assert json.loads((cadence.parent / "superseded-cadence" / (old["window_id"] + ".json")).read_text()) == previous
+    active = json.loads(cadence.read_text())
+    predecessor = cadence.parent / "superseded-cadence" / f"{active['supersedes']}.json"
+    assert json.loads(predecessor.read_text()) == previous
     assert [path.read_bytes() for path in old_artifacts] == original_bytes
     assert failure_proof.read_bytes() == retained_bytes
     assert reports.delivery_current(owner, old) is False
@@ -2329,9 +2331,10 @@ def test_empty_items_readback_recovers_on_same_turn_unless_explicitly_contradict
         assert reports.current_window(ctx["owner"])[1]["window_id"] == old["window_id"]
 
 
-def test_consecutive_missed_windows_keep_the_first_unreported_deadline(tmp_path):
+@pytest.mark.parametrize("previous_archive_uses_window_id", [False, True])
+def test_consecutive_missed_windows_keep_the_first_unreported_deadline(tmp_path, previous_archive_uses_window_id):
     from datetime import timezone
-    from loopx.capabilities.periodic_report.cadence_journal import admit_cadence_window, missed_cadence_bounds
+    from loopx.capabilities.periodic_report.cadence_journal import admit_cadence_window, cadence_journal_path, missed_cadence_bounds
 
     schedule = {"schema_version": "periodic_report_schedule_v0", "schedule_id": "daily-report",
         "timezone": "Asia/Shanghai", "rrule": "FREQ=DAILY;BYHOUR=9;BYMINUTE=0", "start_date": "2001-01-01"}
@@ -2346,10 +2349,26 @@ def test_consecutive_missed_windows_keep_the_first_unreported_deadline(tmp_path)
     first = admit(1)
     attempt_directory(tmp_path, first).mkdir(parents=True)
     middle = admit(3)
+    journal = cadence_journal_path(tmp_path, "example")
+    archives = journal.parent / "superseded-cadence"
+    if previous_archive_uses_window_id:
+        # The old writer named the predecessor file after its window.
+        active = json.loads(journal.read_text())
+        (archives / f"{active['supersedes']}.json").rename(archives / f"{first['window_id']}.json")
+        active["supersedes"] = first["window_id"]
+        journal.write_text(json.dumps(active))
     attempt_directory(tmp_path, middle).mkdir(parents=True)
     latest = admit(5)
     assert missed_cadence_bounds(runtime_root=tmp_path, window=latest) == {
         "first_due_at": "2026-01-01T01:00:00Z", "last_due_at": "2026-01-04T01:00:00Z"}
+
+    active = json.loads(journal.read_text())
+    predecessor = archives / f"{active['supersedes']}.json"
+    archived = json.loads(predecessor.read_text())
+    archived["admitted_at"] = "2026-01-03T03:01:00Z"
+    predecessor.write_text(json.dumps(archived))
+    with pytest.raises(ValueError, match="archive identity does not match"):
+        missed_cadence_bounds(runtime_root=tmp_path, window=latest)
 
 
 def test_distinct_due_daily_windows_keep_normal_native_replan_and_quota_rules(steward, tmp_path, monkeypatch):
@@ -2735,3 +2754,117 @@ def test_periodic_report_uses_shipped_reporting_templates_and_respects_workspace
     else:
         assert frozen["reporting"] == expected_default
         assert "360" in frozen["reporting"] and "https://github.com/example-org/example-repo/pull/123" in frozen["reporting"]
+
+
+def test_report_selection_recovery_fails_closed_for_settlement_postcondition_probe_without_looping(
+    steward, tmp_path, monkeypatch, caplog
+):
+    import logging
+    from datetime import timezone
+    from loopx.capabilities.native_chat.steward_monitor import StewardMonitor
+    from loopx.capabilities.native_chat.steward_turn import StewardTurnHost
+    from loopx.capabilities.periodic_report import cadence_runtime
+    from loopx.configure_goal import configure_goal
+    from loopx.control_plane.turn_driver.journal_store import load_turn_journal, turn_journal_path
+    import loopx.capabilities.native_chat.steward_reports as report_host
+
+    store, runtime, _, transport, binding, capture, _ = steward
+    point = datetime.now(timezone.utc).replace(hour=9, minute=1, second=0, microsecond=0) - timedelta(days=2)
+
+    class CalendarClock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return point.astimezone(tz) if tz else point.replace(tzinfo=None)
+
+    monkeypatch.setattr(report_host, "datetime", CalendarClock)
+    monkeypatch.setattr(cadence_runtime, "datetime", CalendarClock)
+    sid, actor, reports, _ = configured(steward, tmp_path, monkeypatch, "sqlite")
+    owner = binding["binding_id"]
+    assert configure_goal(
+        registry_path=runtime.registry_path, goal_id=actor["goal_id"],
+        execution_replan_after_turns=1, execute=True,
+    )["ok"]
+    install_model(steward, tmp_path, sid)
+    assert finish(runtime, pump_steward_monitors(runtime)[0])["response"]["native_loopx"]["status"] == "committed"
+    assert transport.steward_reports.reconcile() == 1
+
+    point += timedelta(days=1)
+    runtime._steward_monitor_next_check.clear()
+    rejected = finish(runtime, pump_steward_monitors(runtime)[0])
+    assert rejected["response"]["native_loopx"]["error_code"] == "turn_todo_selection_deferred"
+
+    bad_vision = {
+        "schema_version": "goal_vision_replan_contract_v0",
+        "state": "active",
+        "vision_patch": {"vision_summary": "Keep reporting.", "acceptance_summary": "Validate full report."},
+        "path_delta": {
+            "outcome": "replan",
+            "prior_assumption": "Old assumption",
+            "observed_reality": "Reality",
+            "retained": ["Same report route"],
+            "changed": ["Updated baseline"],
+            "evidence_refs": ["fixture:evidence"],
+        },
+    }
+    bad_outcome = {
+        "result_kind": "replan_required",
+        "classification": "outcome_gap_without_blocked_fields",
+        "delivery_batch_scale": "implementation",
+        "delivery_outcome": "outcome_gap",
+        "work_evidence": ["Observed gap"],
+        "validation_evidence": ["Validated check"],
+        "path_delta_mode": "material_replan",
+        "agent_vision_json": json.dumps(bad_vision),
+        "summary": "Trigger failed validation probe.",
+        "next_action": "Retain safely.",
+    }
+    helper = tmp_path / "report_model.py"
+    helper.write_text(
+        _REPORT_MODEL_SOURCE.replace("def fake_report_model(", "def report_only(")
+        + "\ndef fake_report_model(params):\n"
+        + "    import json\n"
+        + "    prompt = '\\n'.join(row.get('text', '') for row in params.get('input', []) if isinstance(row, dict))\n"
+        + "    request = json.JSONDecoder().raw_decode(prompt.split('Turn request:', 1)[1].lstrip())[0]\n"
+        + "    if request.get('detail_ref', {}).get('replan_action_packet'):\n"
+        + "        return " + repr(json.dumps(bad_outcome)) + "\n"
+        + "    return report_only(params)\n"
+    )
+    runtime._steward_monitor_next_check.clear()
+    retry_turn = finish(runtime, pump_steward_monitors(runtime)[0])
+    replan_events = [
+        row["payload"] for row in store.events_after(sid, retry_turn["turn_id"], None)
+        if row["kind"] == "native_loopx.replan_result"
+    ]
+    assert len(replan_events) == 1
+    turn_key = replan_events[0]["resume_turn_key"]
+    jpath = turn_journal_path(reports.root, goal_id=actor["goal_id"], turn_key=turn_key)
+    journal = load_turn_journal(jpath)
+    journal["validation_stage"] = "settlement_postcondition"
+    jpath.write_text(json.dumps(journal), encoding="utf-8")
+
+    assert configure_goal(
+        registry_path=runtime.registry_path, goal_id=actor["goal_id"],
+        execution_replan_after_turns=6, execute=True,
+    )["ok"]
+    host = StewardTurnHost(runtime)
+    assert host.report_selection_recovery(rejected, probe_turn=retry_turn) is None
+
+    caplog.set_level(logging.WARNING, logger="loopx.capabilities.native_chat.steward_monitor_pump")
+    calls = capture.read_bytes()
+    runtime._steward_monitor_next_check.clear()
+    assert not pump_steward_monitors(runtime)
+    runtime._steward_monitor_next_check.clear()
+    assert not pump_steward_monitors(runtime)
+    current_binding = next(
+        row for row in runtime.project_contexts.conversation_bindings.read()["bindings"]
+        if row["binding_id"] == owner
+    )
+    accepted, created = reports.frontier(dict(current_binding))
+    assert created is False and accepted["turn_id"] == retry_turn["turn_id"]
+    assert not caplog.records
+    assert capture.read_bytes() == calls
+    _, window = reports.current_window(owner)
+    assert window is not None and any(
+        row["target_key"] == window["window_id"] and row["status"] == "open"
+        for row in StewardMonitor(runtime).todos(actor)
+    )

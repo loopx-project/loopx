@@ -136,7 +136,7 @@ def register_task_lease_command(
     parser.add_argument(
         "--ttl-seconds",
         type=int,
-        help="Lease TTL in seconds. Defaults to 45 minutes and is capped at 24 hours.",
+        help="Lease TTL in seconds. Defaults to 3 hours and is capped at 24 hours.",
     )
     parser.add_argument(
         "--write-scope",

@@ -2591,9 +2591,9 @@ def test_native_first_read_reuses_only_observed_write_scope(tmp_path, monkeypatc
         if key != "write_scope":
             assert warm_facts[f"/goal_boundary/{key}"] == value
     assert warm_facts["/interaction_contract/cli_channel/settlement_plan/identity/turn_instance_id"] == "scope-warm"
-    restored_selection = {key: value for key, value in restored_facts.items()
-        if key != "/goal_boundary" and not key.startswith(scope_path)}
     observed = warm[0].get("previously_delivered_fields", [])
+    restored_selection = {key: value for key, value in restored_facts.items()
+        if not key.startswith(scope_path) and not any(pointer.startswith(key + "/") for pointer in observed)}
     assert restored_selection == {
         **warm_facts,
         **{key: value for key, value in restored_selection.items()
@@ -2822,8 +2822,9 @@ def test_native_first_read_reuses_only_the_observed_selected_todo_note(
     assert facts[source_pointer + "/authority_read"] == current_authority
     if complete:
         assert pointer in warm[0].get("previously_delivered_fields", []) and pointer not in facts
-        restored_note = {key: value for key, value in restored.items() if key != pointer}
         observed = warm[0].get("previously_delivered_fields", [])
+        restored_note = {key: value for key, value in restored.items()
+            if key != pointer and not any(address.startswith(key + "/") for address in observed)}
         assert restored_note == {
             **facts,
             **{key: value for key, value in restored_note.items()

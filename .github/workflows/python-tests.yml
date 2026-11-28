@@ -51,6 +51,8 @@ jobs:
     outputs:
       core_tests: ${{ steps.classify.outputs.core_tests }}
       backend_tests: ${{ steps.classify.outputs.backend_tests }}
+      frontend_tests: ${{ steps.classify.outputs.frontend_tests }}
+      compat_tests: ${{ steps.classify.outputs.compat_tests }}
       change_kind: ${{ steps.classify.outputs.change_kind }}
       python_tests: ${{ steps.classify.outputs.python_tests }}
       stage2c_tests: ${{ steps.classify.outputs.stage2c_tests }}
@@ -97,8 +99,15 @@ jobs:
               summary.write("## CI job exemptions\n\n")
               summary.write(f"Change kind: **{plan['change_kind']}**; Python shards: **{plan['python_shards']}**.\n\n")
               summary.write(plan['reason'] + ".\n\n")
-              summary.write(f"Backend: {plan['backend_tests']}; Python: {plan['python_tests']}; Stage2c: {plan['stage2c_tests']}; frontend: {plan['core_tests']}; freshness: {plan['presentation_tests']}.\n\n")
-              summary.write(plan["coverage_scope"] + ". Unknown/mixed changes and main run full. Label ci:full forces full qualification.\n")
+              summary.write(
+                  f"Backend: {plan['backend_tests']}; Frontend browser: {plan['frontend_tests']}; "
+                  f"Compat: {plan['compat_tests']}; Python: {plan['python_tests']}; "
+                  f"Stage2c: {plan['stage2c_tests']}; freshness: {plan['presentation_tests']}.\n\n"
+              )
+              summary.write(
+                  plan["coverage_scope"]
+                  + ". Normal PRs run fast static/contract/TS checks; Nightly schedule, main, merge_group, CI-policy/manifest edits and ci:full run full.\n"
+              )
           PY
       - uses: actions/upload-artifact@v7
         with:
@@ -147,7 +156,7 @@ jobs:
 
   chat-bundle-browser:
     needs: [changes, chat-bundle]
-    if: needs.changes.outputs.core_tests == 'true' && !cancelled() && needs.chat-bundle.result == 'success'
+    if: needs.changes.outputs.frontend_tests == 'true' && !cancelled() && needs.chat-bundle.result == 'success'
     runs-on: ubuntu-latest
     # The packaged scenario catalog outgrew one 15-minute runner, so the
     # catalog is partitioned like dashboard-browser and the companion smokes
@@ -255,6 +264,8 @@ jobs:
           python -m pytest -q --no-cov
           tests/test_stage2c_dependency_lock.py
           tests/architecture/test_top_level_module_budget.py
+          tests/test_repository_instruction_delivery.py
+          tests/test_contributing_guide.py
 
       - name: Lint test suite
         run: >-
@@ -422,7 +433,7 @@ jobs:
 
   dashboard-browser:
     needs: [changes, chat-bundle]
-    if: needs.changes.outputs.core_tests == 'true' && !cancelled() && needs.chat-bundle.result == 'success'
+    if: needs.changes.outputs.frontend_tests == 'true' && !cancelled() && needs.chat-bundle.result == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 25
     strategy:
@@ -508,7 +519,7 @@ jobs:
 
   dashboard-acceptance:
     needs: [changes, dashboard-browser]
-    if: needs.changes.outputs.core_tests == 'true' && !cancelled() && needs.dashboard-browser.result == 'success'
+    if: needs.changes.outputs.frontend_tests == 'true' && !cancelled() && needs.dashboard-browser.result == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -550,7 +561,7 @@ jobs:
 
   node-minimum-compatibility:
     needs: [changes, chat-bundle]
-    if: needs.changes.outputs.backend_tests == 'true' && !cancelled() && needs.chat-bundle.result == 'success'
+    if: needs.changes.outputs.compat_tests == 'true' && !cancelled() && needs.chat-bundle.result == 'success'
     runs-on: ubuntu-latest
     # The full suite runs under this exact Node version in typescript-core.
     timeout-minutes: 10
@@ -577,7 +588,7 @@ jobs:
     needs: [changes, chat-bundle]
     # Probe the future runtime once per night or on demand, outside the PR/main
     # critical path. The supported runtime still runs on every full candidate.
-    if: (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && needs.changes.outputs.backend_tests == 'true' && !cancelled() && needs.chat-bundle.result == 'success'
+    if: (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && needs.changes.outputs.compat_tests == 'true' && !cancelled() && needs.chat-bundle.result == 'success'
     continue-on-error: true
     runs-on: ubuntu-latest
     # This runs the full core conformance suite. Allow forward-runtime/runner
@@ -944,6 +955,7 @@ jobs:
           tests/control_plane/test_refresh_settle_turn.py::test_wrong_or_missing_child_workspace_retains_owed_command_for_exact_recovery
           tests/control_plane/test_refresh_settle_turn.py::test_legacy_posix_quoted_powershell_launcher_fails_before_settlement
           tests/control_plane/test_refresh_settle_turn.py::test_pinned_powershell_launcher_settles_original_turn_once
+          tests/control_plane/test_refresh_settle_turn.py::test_composed_settlement_keeps_commit_when_private_capture_is_unsupported
 
       - name: Restore the primary Windows Node runtime
         uses: actions/setup-node@v6

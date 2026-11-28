@@ -176,7 +176,7 @@ operate 24/7 with explicit durability and human gates:
 | Scale | How LoopX runs | Authority, collaboration & governance posture |
 | --- | --- | --- |
 | **Solo developer & local agent** | `python3 -m pip install --upgrade loopx` with zero external infrastructure; connect your existing CLI/Desktop runtime | Canonical local **SQLite** store with hard leases (plus existing File setups), surviving restarts and compaction at zero idle tokens |
-| **Engineering team & enterprise path** | Peer workers claim todos and return reviewed artifacts on shared Goals via Desktop Workspace, GitHub, and Lark ([three-agent demo](examples/collaboration-delivery/README.md)) | Preserves worker ownership and human approval gates; extends to staged **PostgreSQL** remote authority ([provider](loopx/control_plane/coordination/postgresql_authority_store.ts)) and planned org governance—RBAC, SSO, quotas, signed audit—in the [adoption & SaaS roadmap](docs/product/roadmaps/saas-opportunity-assessment.md) |
+| **Engineering team & enterprise path** | Peer workers claim todos and return reviewed artifacts on shared Goals via Desktop Workspace, GitHub, and Lark ([three-agent demo](examples/collaboration-delivery/README.md)) | Preserves worker ownership and human approval gates; keeps local **File**/**SQLite** authority and the outbound HTTPS **RemoteAuthority** client contract ([wire contract](loopx/control_plane/coordination/remote_authority_contract.ts)) Apache-2.0 in `loopx`, while server-side PostgreSQL authority, distributed coordination, and multi-tenant org governance—RBAC, SSO, quotas, signed audit—live in `loopx-project/loopx-cloud` ([licensing boundary](docs/project/licensing.md#open-core-and-commercial-boundaries), [adoption & SaaS roadmap](docs/product/roadmaps/saas-opportunity-assessment.md)) |
 
 ## See LoopX in Action
 
@@ -315,7 +315,7 @@ upgrades, rollback and uninstall.
 | ZCode | Install the skill facade with `loopx slash-commands --install --surface zcode`, then invoke the `$loopx` skill (or `/loopx <complex task>`) from a ZCode session in the project. | The ZCode session's own turn loop; every continuation enters through `quota should-run` |
 | Antigravity CLI (agy) | Install the skill facade with `loopx slash-commands --install --surface agy`, then invoke the `loopx` skill (or `/loopx <complex task>`) from an `agy` session in the project. | The session's native `/goal` loop (audited until `<!-- GOAL_COMPLETE -->`) with `schedule` self-wakes while the session lives; the facade instructs every turn/wake to re-enter through `quota should-run` — advisory pacing, not a host-enforced gate |
 | Kiro CLI | Install the skill facade with `loopx slash-commands --install --surface kiro-cli`, then run `/loopx <complex task>` from a `kiro-cli` session in the project. | The session's native `/goal --max <N> <task_body> Done when: <criteria>` loop, with the acceptance criteria stated inside the goal statement because the host derives them from it, bounded by the host's own iteration budget (default 5) and settled through the built-in `goal` completion contract; the facade instructs every turn and iteration to re-enter through `quota should-run` — advisory pacing, not a host-enforced gate |
-| DeepSeek Harness (dsh) | Install the [native DSH plugin](packages/dsh-loopx-plugin/README.md), select the `loopx` skill, and describe the task. The [dsh goal-mode adapter](loopx/dsh_goal_mode/README.md) remains available for headless turns. | Native same-session continuation and GoalBar, or headless dsh segments; both remain gated by LoopX authority |
+| DeepSeek Harness (dsh) | Install the [native DSH plugin](packages/dsh-loopx-plugin/README.md), select the `loopx` skill, and describe the task. The [dsh goal-mode adapter](loopx/hosts/dsh/README.md) remains available for headless turns. | Native same-session continuation and GoalBar, or headless dsh segments; both remain gated by LoopX authority |
 | Cursor, shell, or custom runner | `loopx start-goal --guided --project . --goal-text "<task>"`, or call LoopX from your runner. | Your shell, scheduler, or runner |
 
 The exact, copy-ready setup messages and host recovery paths live in
@@ -324,8 +324,8 @@ the [Codex App host command registry contract](docs/reference/protocols/codex-ap
 the [Codex CLI packaged install path](docs/product/runtimes/codex-cli/codex-cli-packaged-install.md),
 the [Claude Code adapter](loopx/claude_goal_mode/README.md), the
 [KunlunCode native Goal adapter](loopx/kunluncode_goal_mode/README.md), the
-[Kiro CLI goal-mode adapter](loopx/kiro_cli_goal_mode/README.md), or the
-[DeepSeek Harness turn adapter](loopx/dsh_goal_mode/README.md).
+[Kiro CLI goal-mode adapter](loopx/hosts/kiro_cli/README.md), or the
+[DeepSeek Harness turn adapter](loopx/hosts/dsh/README.md).
 
 See the [60-second DSH × LoopX Replan recording and reproducible
 fixture](docs/showcases/cases/dsh-loopx-replan-demo.md) for the native path:

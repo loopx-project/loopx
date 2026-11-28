@@ -10,7 +10,7 @@ import uuid
 from collections.abc import Callable, Mapping
 import webbrowser
 from functools import partial
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from http.server import BaseHTTPRequestHandler
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, cast
 from urllib.parse import parse_qs, urlparse
@@ -106,9 +106,12 @@ from .extensions.runtime import (
 from .chat.completed_todos import CompletedTodoPages, CompletedTodoRequestMixin
 from .presentation.explore_results_api import ExploreResultsRequestMixin
 from .presentation.research_analysis_api import RESEARCH_ANALYSIS_PATH, ResearchAnalysisRequestMixin
-from .presentation.goal_source_routing import GOAL_SOURCE_LINKS_PATH, GOAL_SOURCE_STRATEGIES_PATH, GOAL_SOURCE_DOCUMENT_PATH, GoalSourceRequestMixin
+from .presentation.goal_source_routing import (
+    GOAL_SOURCE_DOCUMENT_PATH, GOAL_SOURCE_EXECUTION_PATH, GOAL_SOURCE_LINKS_PATH,
+    GOAL_SOURCE_STRATEGIES_PATH, GoalSourceRequestMixin,
+)
 from .chat.todo_detail import TodoDetailRequestMixin
-from .kiro_cli_goal_mode import KIRO_CLI_BIN
+from .hosts.kiro_cli import KIRO_CLI_BIN
 from .paths import resolve_runtime_root
 from .release_manifest import release_runtime_identity
 from .control_plane.projects.registry_codec import load_registry
@@ -117,8 +120,11 @@ from .thread_agent_binding import list_attached_session_bindings
 from .status_server import (
     DEFAULT_EXTENSION_PRESENTATION_SURFACES_PATH,
     DEFAULT_EXTENSION_PROJECTION_PATH,
+    DisconnectSafeHTTPServer,
+    is_client_disconnect_error,
     is_loopback_host,
     parse_strict_json_object,
+    send_http_response,
 )
 
 
@@ -262,7 +268,7 @@ def resolve_lark_cli_for_runtime(
     )
 
 
-class ChatHTTPServer(background_api.BackgroundServicesServerMixin, ThreadingHTTPServer):
+class ChatHTTPServer(background_api.BackgroundServicesServerMixin, DisconnectSafeHTTPServer):
     allow_reuse_address = True
 
     registry_path: Path
@@ -356,8 +362,7 @@ class ChatRequestHandler(
         self.send_header("X-Content-Type-Options", "nosniff")
         for key, value in chat_cors_response_headers(self._cors_origin).items():
             self.send_header(key, value)
-        self.end_headers()
-        self.wfile.write(body)
+        send_http_response(self, body)
 
     def _send_error(
         self,
@@ -454,8 +459,7 @@ class ChatRequestHandler(
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-cache")
         self.send_header("X-Content-Type-Options", "nosniff")
-        self.end_headers()
-        self.wfile.write(body)
+        send_http_response(self, body)
 
     def _create_session(self) -> None:
         try:
@@ -762,15 +766,16 @@ class ChatRequestHandler(
             self._send_error("chat session was not found", status=404)
         except ValueError as exc:
             self._send_error(str(exc), status=400)
-        except OSError:
+        except OSError as exc:
+            if is_client_disconnect_error(exc):
+                self.close_connection = True
+                return
             self._send_error("Chat history is temporarily unavailable", status=503)
 
     def _list_sessions(self) -> None:
         query = parse_qs(urlparse(self.path).query, keep_blank_values=True)
         if "managed_agent_id" in query:
-            # Agent registration is distinct from the executor's agent_id.
-            # Reuse Core's exact original identity admission; an older service
-            # ignoring this selector must not look like a successful discovery.
+            # Agent registration is distinct from the executor's agent_id. Reuse Core's exact identity admission.
             from .capabilities.native_chat.steward_managed_mode import StewardManagedMode, managed_session_identity
             if (set(query) != {"goal_id", "managed_agent_id"}
                     or any(len(values) != 1 or not values[0] for values in query.values())):
@@ -856,7 +861,8 @@ class ChatRequestHandler(
         self.send_header("X-Accel-Buffering", "no")
         for key, value in chat_cors_response_headers(self._cors_origin).items():
             self.send_header(key, value)
-        self.end_headers()
+        if not send_http_response(self):
+            return
         cursor = str(last_event_id or "0")
         heartbeat_at = time.monotonic()
         try:
@@ -880,8 +886,11 @@ class ChatRequestHandler(
                     self.wfile.flush()
                     heartbeat_at = time.monotonic()
                 time.sleep(0.05)
-        except (BrokenPipeError, ConnectionResetError):
-            return
+        except OSError as exc:
+            if is_client_disconnect_error(exc):
+                self.close_connection = True
+                return
+            raise
 
     def _steer_turn(self, session_id: str, turn_id: str) -> None:
         try:
@@ -1455,6 +1464,7 @@ class ChatRequestHandler(
             GOAL_SOURCE_LINKS_PATH: self._goal_source_links,
             GOAL_SOURCE_STRATEGIES_PATH: self._goal_source_strategies,
             GOAL_SOURCE_DOCUMENT_PATH: self._goal_source_document,
+            GOAL_SOURCE_EXECUTION_PATH: self._goal_source_execution,
             "/api/chat/todo/detail": self._todo_detail,
             "/api/chat/completed-todos": self._completed_todos,
             "/api/chat/explore-results": self._explore_results,
@@ -1499,7 +1509,8 @@ class ChatRequestHandler(
         if path == "/":
             self.send_response(302)
             self.send_header("Location", DEFAULT_CHAT_PATH)
-            return self.end_headers()
+            send_http_response(self)
+            return
         if path == "/chat" or path.startswith("/chat/"):
             return self._serve_asset(path)
         self._send_error("unknown path", status=404)
@@ -1576,7 +1587,7 @@ class ChatRequestHandler(
         self.send_response(204)
         for key, value in chat_cors_response_headers(self._cors_origin).items():
             self.send_header(key, value)
-        self.end_headers()
+        send_http_response(self)
 
     def do_DELETE(self) -> None:
         if not self._require_loopback_origin():
@@ -1683,7 +1694,7 @@ def serve_chat(
             for app in list_lark_apps(runner=server.lark_runner, cli_bin=lark_cli_cmd)
         ),
     )
-    server.chat_store = ChatSessionStore(runtime_root)
+    server.chat_store = ChatSessionStore(runtime_root, compact_on_init=False)
     server.action_store = ChatActionStore(runtime_root / "chat" / "actions")
     from .presentation.request_control_api import bound_steward_inventory_scope
     from .chat.lark_api import manager_source_scope_resolver
@@ -1762,8 +1773,7 @@ def serve_chat(
     server.delegation_wake_service = DelegationWakeService(
         server.runtime_controller, goal_context=_wake_goal_context
     ).start()
-    # Resume only retained, explicitly confirmed creation requests through the
-    # existing Session queue. Its owner rechecks source, native work and gates.
+    # Resume confirmed creation requests via Session queue (rechecking gates).
     server.runtime_controller.resume_creation_requests()
     url = f"http://{host}:{port}{DEFAULT_CHAT_PATH}"
     print(f"Serving LoopX Chat at {url}", flush=True)
@@ -1781,6 +1791,7 @@ def serve_chat(
             server.conversation_transports.start(server)
         background_api.register_chat_background_services(server)
         server.background_services.start()
+        server.chat_store.start_background_compaction()
         server.serve_forever()
     except KeyboardInterrupt:
         print("Stopping LoopX Chat", flush=True)

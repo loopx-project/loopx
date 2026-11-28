@@ -57,15 +57,77 @@ The installed-only qualification in
 exercises setup, independent result validation, process loss, replay and refusal.
 No model service, credentials or paid task execution is supplied by this wheel.
 
-Goal-start help and preview use issue-fix command metadata without importing
-its execution providers. An explicit `--capability-route issue-fix` retains
-the existing candidate-preflight contract. The installed context qualification
+To view the same work in your browser, install the matching
+[`loopx-workspace` wheel](../loopx-workspace/README.md) in this environment and
+start `loopx dashboard` with the original registry.
+
+Core keeps the benchmark catalog and the four-arm contract it references.
+Install the matching [Benchmark Toolkit wheel](../loopx-capability-benchmark-toolkit/README.md)
+to run `loopx benchmark` or use registered analysis packs in Workspace.
+`loopx capability show benchmark-toolkit` reports availability and installation
+guidance. Normal discovery leaves benchmark execution unloaded.
+
+Ordinary Core goal previews omit Issue Fix command templates. Install the
+[matching workflow wheel](../loopx-capability-issue-fix/README.md) to select
+`--capability-route issue-fix` or run `loopx issue-fix`. Core retains existing
+PR-wait observations, confirmed review reconciliation, and their state.
+The installed context qualification
 in [`test_installed_core_context.py`](../../tests/control_plane/test_installed_core_context.py)
 executes the existing `quota context-project`, `context-read` and `context-hook`
 commands: incomplete delivery cannot establish a baseline, revisions preserve
 complete constraints, compaction requires recovery, and changed capture bytes
 are refused. Its native events are protocol fixtures; they do not establish
 model retention or installed-host adoption.
+
+`capability show agent-turn-recall` reports the optional recall implementation
+as unavailable in Core alone. Install the [matching recall wheel](../loopx-capability-agent-turn-recall/README.md)
+in the Core environment to make its existing command available. Recall starts
+only with the existing explicit Goal/Agent configuration. When the implementation
+is unavailable, an enabled Goal records that fact and continues the task.
+Outcome ingest uses its own configuration and recovery path.
+
+`capability show pull-request-review` reports whether the [matching PR review
+wheel](../loopx-capability-pull-request-review/README.md) is installed. Core
+retains its catalog and settings. The add-on provides the existing `pr-review`
+command on explicit use. Removing it preserves review settings and checkpoints.
+
+### Standard CLI composition
+
+Install `loopx-core[standard]` to select Agent Turn Recall, Pull Request Review
+and Issue Fix together. Build the three companion wheels into the same
+directory as the Core wheel, using the same checkout. Set `LOOPX_CORE_PYTHON`
+to the interpreter of a new environment or the matching Core environment.
+
+```sh
+for capability in agent-turn-recall pull-request-review issue-fix; do
+  distribution="loopx-capability-$capability"
+  python packages/loopx-core/prepare.py --distribution "$distribution" --output "/tmp/$distribution-source"
+  uv build --wheel "/tmp/$distribution-source" --out-dir /tmp/loopx-core-dist
+done
+uv pip install --no-index --find-links /tmp/loopx-core-dist \
+  --reinstall-package loopx-core --python "$LOOPX_CORE_PYTHON" 'loopx-core[standard]'
+"$LOOPX_CORE_PYTHON" -I -m loopx.entrypoint capability list --format json
+```
+
+The reinstall option reads the selected wheel's metadata when an earlier
+source build of the same version is already installed.
+
+Each ability can also be installed on its own. Use the existing commands and
+Goal settings to select a workflow. To return to Core-only installation,
+uninstall the three companion wheels in the same environment:
+
+```sh
+uv pip uninstall --python "$LOOPX_CORE_PYTHON" \
+  loopx-capability-agent-turn-recall loopx-capability-pull-request-review loopx-capability-issue-fix
+```
+
+To add optional Explore orchestration (frontier/multi-branch planning, replay,
+external-evidence observation, and read-only citation export) alongside the
+standalone `deepresearch` evidence ledger and `external-evidence` commands, build
+and install the matching [research workflow wheel](../loopx-capability-research/README.md).
+Core retains Explore's result-event schema, lightweight projection, and Goal
+permission/settlement validation; existing project ledgers remain readable and
+unmodified on rollback.
 
 The candidate owns the same `loopx` import namespace and console command as the
 ordinary distribution. Do not co-install or overlay them. Return to the ordinary
@@ -75,11 +137,12 @@ new default, migration, automatic upgrade, PyPI publication or platform release.
 
 This is the first independently installable core-artifact slice of R1/M3 in the
 [small-kernel RFC](../../docs/architecture/rfcs/monorepo-distribution-split-v0.md).
-It still retains built-in capability implementations, policy helpers and several
+It still retains other built-in capability implementations, policy helpers and several
 host/CLI dependencies because the current imports are coupled. This makes it a
 workspace-free installation prerequisite, not a qualified minimal mechanism
 closure. Those dependencies are migration debt, not evidence that every
-capability belongs in the kernel. Full workspace/meta-package splitting,
-independent capability packaging, other host/platform qualification and the
+capability belongs in the kernel. Public split-package releases,
+full workspace/meta-package splitting, independent capability packaging,
+native/IM adoption and the
 complexity/coverage hypothesis remain separate work. Smaller installation or a
 passing process fixture alone does not establish model effectiveness.

@@ -537,7 +537,7 @@ def handle_todo_command(
                 payload["instruction"] = (
                     "Continue the task. Use this original claim reference for progress "
                     "or completion; pass --ttl-seconds on claim (1..86400) for long "
-                    "(>45m) execution wakes or renew via `loopx task-lease renew` "
+                    "(>3h) execution wakes or renew via `loopx task-lease renew` "
                     "before lease_expires_at, and retain normal Turn settlement "
                     "(omitting --next-action on completed-Todo semantic_closeout "
                     "refresh-state)."

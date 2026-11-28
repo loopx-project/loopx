@@ -2,6 +2,66 @@ from __future__ import annotations
 
 from typing import Any
 
+from ...python_install_owner import (
+    RESEARCH_DISTRIBUTION,
+    inspect_builtin_capability_distribution,
+)
+
+
+RESEARCH_INSTALL_HINT = (
+    "Install the matching loopx-capability-research wheel into this Core environment "
+    "for Explore orchestration, evidence ledgers, and external evidence workflows."
+)
+RESEARCH_MODULES = (
+    "loopx.cli_commands.explore",
+    "loopx.cli_commands.explore_planning_commands",
+    "loopx.cli_commands.explore_feishu_commands",
+    "loopx.capabilities.explore.adaptive_replay_planner",
+    "loopx.capabilities.explore.child_replay_runtime",
+    "loopx.capabilities.explore.counterfactual_runtime",
+    "loopx.capabilities.explore.episode_runtime",
+    "loopx.capabilities.explore.harness_checkpoint",
+    "loopx.capabilities.explore.harness_frontier",
+    "loopx.capabilities.explore.harness_queue",
+    "loopx.capabilities.explore.harness_runtime",
+    "loopx.capabilities.explore.replay_metrics",
+    "loopx.capabilities.explore.replay_runtime",
+    "loopx.capabilities.explore.research_bridge",
+    "loopx.capabilities.explore.research_snapshot_host",
+    "loopx.capabilities.explore.resource_portfolio",
+    "loopx.capabilities.explore.router_state",
+    "loopx.capabilities.explore.source_history_reconcile",
+    "loopx.capabilities.explore.speculative_scheduler",
+    "loopx.capabilities.explore.todo_branch_plan",
+    "loopx.capabilities.explore.todo_evidence",
+    "loopx.capabilities.explore.trace_runtime",
+    "loopx.capabilities.explore.worker_branch_plan",
+    "loopx.capabilities.deep_research.runtime",
+    "loopx.capabilities.external_research.cli",
+    "loopx.capabilities.external_research.projection",
+    "loopx.capabilities.external_research.provider_probe",
+    "loopx.cli_commands.deepresearch",
+    "loopx.extensions.public_github_research",
+)
+RESEARCH_RESOURCES = ("loopx/control_plane/capabilities/external_evidence.ts",)
+
+
+def inspect_research_workflow_distribution(
+    *, builtin_cli_present: bool | None = None,
+) -> dict[str, Any]:
+    return inspect_builtin_capability_distribution(
+        RESEARCH_DISTRIBUTION,
+        RESEARCH_MODULES,
+        builtin_cli_present=builtin_cli_present,
+        resources=RESEARCH_RESOURCES,
+    )
+
+
+def research_workflows_installed(*, builtin_cli_present: bool | None = None) -> bool:
+    return bool(
+        inspect_research_workflow_distribution(builtin_cli_present=builtin_cli_present)["ready"]
+    )
+
 
 DEEP_RESEARCH_CATALOG_ENTRY: dict[str, Any] = {
     "id": "deep-research",

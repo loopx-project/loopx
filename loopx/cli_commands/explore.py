@@ -22,40 +22,12 @@ from ..capabilities.explore.result_log import (
     explore_result_log_path,
     load_explore_result_events_strict,
 )
-from ..capabilities.explore.research_evidence import append_research_observation
-from ..capabilities.explore.harness_gate import GATE_STATE_DISABLED
-from ..capabilities.explore.resource_portfolio import parse_resource_counts
-from ..capabilities.explore.source_history_reconcile import (
-    reconcile_explore_source_history,
-)
-from ..capabilities.explore.todo_branch_plan import (
-    build_explore_todo_branch_plan,
-    resolve_todo_branch_plan_gate,
-)
-from ..capabilities.explore.worker_branch_plan import (
-    build_explore_worker_branch_plan,
-    resolve_explore_harness_gate,
-)
+from ..control_plane.projects.registry_codec import load_registry
 from ..control_plane.runtime.runtime_projection_route import (
     compact_goal_source_runtime_route,
     resolve_goal_source_runtime_route,
 )
-from ..extensions.lark import LARK_EXTENSION_ID, LARK_PROJECTION_SINK_PERMISSION
-from ..extensions.lark.presentation.explore_results import (
-    lark_explore_schema_payload,
-    read_lark_explore_local_config,
-)
-from ..extensions.lark.presentation.explore_singleflight import (
-    default_lark_explore_config_path,
-)
-from ..presentation.explore_views import build_explore_presentation_bundle
-from ..extensions.runtime import (
-    default_extension_state_file,
-    resolve_extension_activation,
-)
-from ..history import load_registry
 from ..paths import resolve_runtime_root
-from ..control_plane.todos.list_readback import list_goal_todos
 from .explore_feishu_commands import (
     FEISHU_SINK_EXPLORE_COMMANDS,
     handle_explore_feishu_command,
@@ -157,6 +129,33 @@ def register_explore_commands(
     observe.add_argument("--goal-id", required=True)
     observe.add_argument("--observation-json", required=True, help="File containing a typed_research_observation_v0 envelope.")
     observe.add_argument("--agent-id")
+
+    observe_external = sub.add_parser(
+        "observe-external",
+        help="Project explicitly parent-admitted external evidence onto an existing same-goal Explore node; never executes providers automatically.",
+    )
+    add_subcommand_format(observe_external)
+    observe_external.add_argument("--goal-id", required=True)
+    observe_external.add_argument("--node", dest="node_id", required=True, help="Existing target node id inside the same Goal.")
+    observe_external.add_argument("--plan-json", required=True, metavar="FILE")
+    observe_external.add_argument("--receipt-json", required=True, metavar="FILE")
+    observe_external.add_argument("--admission-json", required=True, metavar="FILE")
+    observe_external.add_argument("--expected-goal-id", help="Optional expected source Goal id; fails closed on mismatch.")
+    observe_external.add_argument("--agent-id")
+    observe_external.add_argument("--execute", action="store_true", help="Write sanitized findings to the Goal Explore log (dry-run by default).")
+
+    import_citations = sub.add_parser(
+        "import-citations",
+        help="One-way read-only export of authorized answered citations from a deepresearch ledger into an enabled Goal Explore node.",
+    )
+    add_subcommand_format(import_citations)
+    import_citations.add_argument("--goal-id", required=True)
+    import_citations.add_argument("--node", dest="node_id", required=True, help="Existing target node id inside the same Goal.")
+    import_citations.add_argument("--project", required=True, help="Project directory holding .loopx/deepresearch/.")
+    import_citations.add_argument("--claim-id", dest="claim_ids", action="append", default=[], help="Optional authorized claim id to export; repeatable.")
+    import_citations.add_argument("--expected-goal-id", help="Optional expected source Goal id; fails closed on mismatch.")
+    import_citations.add_argument("--agent-id")
+    import_citations.add_argument("--execute", action="store_true", help="Write sanitized citation refs to the Goal Explore log (dry-run by default).")
 
     presentation = sub.add_parser(
         "presentation",
@@ -534,6 +533,9 @@ def handle_explore_command(
         if args.explore_command in (
             {"schema", "source-history-reconcile"} | FEISHU_SINK_EXPLORE_COMMANDS
         ):
+            from ..extensions.lark import LARK_EXTENSION_ID, LARK_PROJECTION_SINK_PERMISSION
+            from ..extensions.runtime import default_extension_state_file, resolve_extension_activation
+
             activation = resolve_extension_activation(
                 LARK_EXTENSION_ID,
                 state_file=default_extension_state_file(runtime_root),
@@ -553,12 +555,9 @@ def handle_explore_command(
         same_source = source_registry.resolve() == registry_path.resolve()
         projection_for = partial(_projection_for, registry=registry if same_source else None,
                                  source_registry=None if same_source else source_registry)
-        config_path = (
-            Path(args.config_path).expanduser()
-            if getattr(args, "config_path", None)
-            else default_lark_explore_config_path(source_registry)
-        )
         if args.explore_command == "schema":
+            from ..extensions.lark.presentation.explore_results import lark_explore_schema_payload
+
             payload = lark_explore_schema_payload()
         elif args.explore_command == "turn-context":
             from ..capabilities.explore.turn_context import explore_turn_context
@@ -627,6 +626,8 @@ def handle_explore_command(
             )
             payload = _append_event_payload(event, runtime_root=runtime_root, goal_id=args.goal_id)
         elif args.explore_command == "observe":
+            from ..capabilities.explore.research_evidence import append_research_observation
+
             observation = json.loads(Path(args.observation_json).read_text(encoding="utf-8"))
             if not isinstance(observation, dict):
                 raise ValueError("research observation must be an object")
@@ -636,9 +637,46 @@ def handle_explore_command(
                 registry_path=source_registry,
                 runtime_root=runtime_root,
             )
+        elif args.explore_command == "observe-external":
+            from ..capabilities.explore.research_bridge import project_external_evidence_to_explore
+
+            plan = json.loads(Path(args.plan_json).expanduser().read_text(encoding="utf-8"))
+            receipt_raw = json.loads(Path(args.receipt_json).expanduser().read_text(encoding="utf-8"))
+            receipt = receipt_raw.get("receipt", receipt_raw) if isinstance(receipt_raw, dict) else receipt_raw
+            admission = json.loads(Path(args.admission_json).expanduser().read_text(encoding="utf-8"))
+            if not all(isinstance(item, dict) for item in (plan, receipt, admission)):
+                raise ValueError("plan, receipt, and admission must be JSON objects")
+            payload = project_external_evidence_to_explore(
+                registry_path=source_registry,
+                runtime_root=runtime_root,
+                goal_id=args.goal_id,
+                node_id=args.node_id,
+                plan=plan,
+                receipt=receipt,
+                admission=admission,
+                agent_id=args.agent_id,
+                expected_goal_id=args.expected_goal_id,
+                execute=bool(args.execute),
+            )
+        elif args.explore_command == "import-citations":
+            from ..capabilities.explore.research_bridge import export_deepresearch_citations_to_explore
+
+            payload = export_deepresearch_citations_to_explore(
+                project=Path(args.project).expanduser(),
+                registry_path=source_registry,
+                runtime_root=runtime_root,
+                goal_id=args.goal_id,
+                node_id=args.node_id,
+                agent_id=args.agent_id,
+                expected_goal_id=args.expected_goal_id,
+                claim_ids=args.claim_ids or None,
+                execute=bool(args.execute),
+            )
         elif args.explore_command == "summary":
             payload = projection_for(args, runtime_root=runtime_root)
         elif args.explore_command == "presentation":
+            from ..presentation.explore_views import build_explore_presentation_bundle
+
             projection = projection_for(
                 args,
                 runtime_root=runtime_root,
@@ -646,6 +684,15 @@ def handle_explore_command(
             )
             payload = build_explore_presentation_bundle(projection)
         elif args.explore_command == "source-history-reconcile":
+            from ..capabilities.explore.source_history_reconcile import reconcile_explore_source_history
+            from ..extensions.lark.presentation.explore_results import read_lark_explore_local_config
+            from ..extensions.lark.presentation.explore_singleflight import default_lark_explore_config_path
+
+            config_path = (
+                Path(args.config_path).expanduser()
+                if getattr(args, "config_path", None)
+                else default_lark_explore_config_path(source_registry)
+            )
             local = read_lark_explore_local_config(config_path)
             result_records = (
                 local.get("result_records")
@@ -702,6 +749,14 @@ def handle_explore_command(
                     )
                 payload["out"] = str(out_path)
         elif args.explore_command == "todo-branch-plan":
+            from ..capabilities.explore.harness_gate import GATE_STATE_DISABLED
+            from ..capabilities.explore.resource_portfolio import parse_resource_counts
+            from ..capabilities.explore.todo_branch_plan import (
+                build_explore_todo_branch_plan,
+                resolve_todo_branch_plan_gate,
+            )
+            from ..control_plane.todos.list_readback import list_goal_todos
+
             resource_capacities = parse_resource_counts(
                 args.resource_capacity,
                 flag_name="--resource-capacity",
@@ -735,6 +790,7 @@ def handle_explore_command(
                     role="agent",
                     status="open",
                     agent_id=args.agent_id,
+                    include_acceptance=False,
                 )
                 payload = build_explore_todo_branch_plan(
                     goal_id=args.goal_id,
@@ -755,6 +811,14 @@ def handle_explore_command(
                     "todo_count": todo_payload.get("todo_count"),
                 }
         elif args.explore_command == "worker-branch-plan":
+            from ..capabilities.explore.harness_gate import GATE_STATE_DISABLED
+            from ..capabilities.explore.resource_portfolio import parse_resource_counts
+            from ..capabilities.explore.worker_branch_plan import (
+                build_explore_worker_branch_plan,
+                resolve_explore_harness_gate,
+            )
+            from ..control_plane.todos.list_readback import list_goal_todos
+
             resource_capacities = parse_resource_counts(
                 args.resource_capacity,
                 flag_name="--resource-capacity",
@@ -788,6 +852,7 @@ def handle_explore_command(
                     role="agent",
                     status="open",
                     agent_id=args.agent_id,
+                    include_acceptance=False,
                 )
                 router_state = None
                 if getattr(args, "router_state", None):
@@ -819,6 +884,13 @@ def handle_explore_command(
                     "todo_count": todo_payload.get("todo_count"),
                 }
         elif args.explore_command in FEISHU_SINK_EXPLORE_COMMANDS:
+            from ..extensions.lark.presentation.explore_singleflight import default_lark_explore_config_path
+
+            config_path = (
+                Path(args.config_path).expanduser()
+                if getattr(args, "config_path", None)
+                else default_lark_explore_config_path(source_registry)
+            )
             payload = handle_explore_feishu_command(
                 args,
                 config_path=config_path,

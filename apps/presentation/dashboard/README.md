@@ -150,7 +150,7 @@ so a Kiro tool call that needs approval is refused rather than auto-approved.
 LoopX passes no `--trust-all-tools`. Reaching the host this way drives one
 read-only Chat session; it is not the governed `/goal` loop, which is entered
 from a Kiro CLI session through the
-[Kiro CLI goal-mode adapter](../../../loopx/kiro_cli_goal_mode/README.md).
+[Kiro CLI goal-mode adapter](../../../loopx/hosts/kiro_cli/README.md).
 
 Source-checkout development is a separate mode:
 

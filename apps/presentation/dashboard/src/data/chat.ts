@@ -35,6 +35,21 @@ export function exportConfigurationBackup(goalIds?: string[]) {
   });
 }
 
+export type ConfigurationBackupComparison = {
+  ok: boolean; status: "compared"; before_sha256: string; after_sha256: string;
+  before_goal_ids: string[]; after_goal_ids: string[]; only_in_before: string[]; only_in_after: string[];
+  before_machine_configuration_present: boolean; after_machine_configuration_present: boolean;
+  change_count: number; changes: {path: string; before_present: boolean; after_present: boolean; before?: unknown; after?: unknown}[];
+};
+
+export function compareConfigurationSnapshots(before: Record<string, unknown>, after: Record<string, unknown>) {
+  const body = JSON.stringify({before, after});
+  if (new TextEncoder().encode(body).byteLength > 64 * 1024 * 1024) {
+    throw new Error("Combined configuration snapshots exceed the 64 MiB comparison limit.");
+  }
+  return requestJson<ConfigurationBackupComparison>("/api/chat/configuration-backup/compare", {method: "POST", body});
+}
+
 export function restoreConfigurationCheckpoint(backup: Record<string, unknown>, execute: boolean) {
   return requestJson<ConfigurationBackupResult>("/api/chat/configuration-backup/restore", {
     method: "POST", body: JSON.stringify({backup, expected_sha256: backup.sha256, execute}),
@@ -1095,10 +1110,10 @@ const chatMessagePageSchema = z.object({
   visible_page_sha256: z.string().regex(/^[a-f0-9]{64}$/).optional(),
 });
 
-// A long original transcript can outlive the interactive request budget even
-// when each verified page succeeds. Apply the same bounded read deadline to
-// its pages and fresh source checks; caller cancellation still takes priority.
-const CHAT_HISTORY_READ_TIMEOUT_MS = 30_000;
+// Apply one bounded read deadline to transcript pages and fresh source checks.
+export const CHAT_HISTORY_READ_TIMEOUT_MS = 30_000;
+const MAX_VERIFIED_HISTORY_MESSAGES = 50_000;
+const MAX_VERIFIED_HISTORY_BASIS_CHARS = 6 + Math.ceil(MAX_VERIFIED_HISTORY_MESSAGES / 200) * 64;
 
 type ChatHistoryReadProgress = {
   first: ChatSessionSnapshot;
@@ -1213,14 +1228,13 @@ async function readChatSessionHistory(session: ChatSessionSummary | string, sign
 }
 
 function historyBasisMatches(basis: string, count: number) {
-  const match = /^([1-9][0-9]{0,3}):([a-f0-9]+)$/.exec(basis);
-  return match !== null && count >= 1 && count <= 5000 && Number(match[1]) === count
+  const match = /^([1-9][0-9]{0,4}):([a-f0-9]+)$/.exec(basis);
+  return match !== null && count >= 1 && count <= MAX_VERIFIED_HISTORY_MESSAGES && Number(match[1]) === count
     && match[2].length === Math.ceil(count / 200) * 64;
 }
 
 function historyImageHeaders(linkImages: boolean): HeadersInit | undefined {
-  // The linked bytes are same-origin resources. A separately configured Chat
-  // server still uses the compatible inline representation.
+  // The linked bytes are same-origin resources; a separate Chat origin stays inline.
   return linkImages && !configuredChatOrigin ? {"X-LoopX-History-Images": "linked"} : undefined;
 }
 
@@ -1240,7 +1254,7 @@ async function tryResumeChatSessionHistory(session: ChatSessionSummary, saved: C
   }
   if (!snapshot || snapshot.history_resume === undefined) return null; // Restart or older service.
   const proof = z.object({schema_version: z.literal("loopx_chat_history_resume_v1"),
-    base: z.literal(basis), next: z.string().max(1605)}).safeParse(snapshot.history_resume);
+    base: z.literal(basis), next: z.string().max(MAX_VERIFIED_HISTORY_BASIS_CHARS)}).safeParse(snapshot.history_resume);
   if (!proof.success || snapshot.ok !== true || snapshot.schema_version !== "loopx_chat_store_v1"
     || !snapshot.session || !sameHistorySource(snapshot.session, session) || Object.hasOwn(snapshot, "message_page")
     || !Array.isArray(snapshot.messages) || snapshot.messages.length > 200

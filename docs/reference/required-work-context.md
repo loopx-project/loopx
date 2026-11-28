@@ -1625,6 +1625,16 @@ spend receipt. Repair capture privacy or read the same operation without the
 output option; a delivery failure does not prove that the effect failed to commit.
 Never rerun admission or change the original Turn/effect identity to recover
 output. This transport change alone does not prove model retention or savings.
+A plan-composed `refresh-state --settle-turn --settlement-receipt` command is
+different: it carries no output option, so the budget is implicit and the caller
+has nothing to remove. When the host cannot validate private captures, that
+composed settlement keeps the already evaluated result inline, reports the
+skipped capture as `result_delivery_error`
+(`quota_decision_capture_unsupported`), and lets the evaluated outcome decide
+the exit code. A committed settlement therefore exits 0 with its identity and
+receipts; a refused one still exits nonzero with its recovery step. Read the
+original Turn receipts to confirm commitment, and never repeat admission or the
+spend for this Turn.
 
 Codex App heartbeat 有原生会话，且当前 Todo 已准入并就绪时，可能收到合并结算计划。
 同一 Turn 先领取再复查就绪，升级后的回执与计划匹配时也适用。
@@ -1653,6 +1663,12 @@ reader reference 在该平台也安全拒绝，不能用 mode bits 代替 Window
 信息，不保证展示预算；被拒绝的操作不一定存在 spend receipt。修复捕获权限或以
 原身份读取无输出预算的结果，不能据投递失败认定效果未提交。恢复不重新准入或
 更换原 Turn／effect 身份。此传输变化本身不证明模型保留或成本收益。
+计划给出的合并命令 `refresh-state --settle-turn --settlement-receipt` 不同：
+它本身不带输出选项，预算由内部给定，调用方没有可移除的参数。平台无法校验私有
+捕获时，该合并结算保留已求值的结果内联返回，把跳过的捕获记为
+`result_delivery_error`（`quota_decision_capture_unsupported`），退出码仍按已求值的
+结果决定。已提交的结算因此以 0 退出并带回身份与回执；被拒绝的结算仍以非零退出并
+带回恢复步骤。核对原 Turn 回执确认提交，不要为此重复准入或扣额。
 
 ### Saved context cache / 已保存上下文缓存
 

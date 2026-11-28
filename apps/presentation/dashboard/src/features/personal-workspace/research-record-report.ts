@@ -2,18 +2,18 @@ import {researchRecordSnapshot, type ResearchRecordExport} from "./research-reco
 
 // Source prose stays literal: it cannot introduce headings, remote images or
 // links into the saved report. Fences grow to preserve embedded code fences.
-function literal(text: string): string {
+export function researchReportLiteral(text: string): string {
   const fence = "`".repeat(Math.max(3, ...Array.from(text.matchAll(/`+/g), match => match[0].length + 1)));
   return `${fence}text\n${text}\n${fence}`;
 }
-const inline = (text: string) => text.replace(/[\\`*_{}\[\]<>()#+.!|~>-]/g, "\\$&").replace(/\r?\n/g, " ");
+export const researchReportInline = (text: string) => text.replace(/[\\`*_{}\[\]<>()#+.!|~>-]/g, "\\$&").replace(/\r?\n/g, " ");
 
 /** Human-readable original evidence, using exactly the JSON export's selection. */
 export function exportResearchReport(input: ResearchRecordExport, zh: boolean): string {
   const snapshot = researchRecordSnapshot(input);
   const label = (en: string, cn: string) => zh ? cn : en;
   const missing = label("Not recorded", "未记录");
-  const field = (name: string, value: unknown) => `- **${name}:** ${inline(value === undefined || value === null || value === "" ? missing : String(value))}`;
+  const field = (name: string, value: unknown) => `- **${name}:** ${researchReportInline(value === undefined || value === null || value === "" ? missing : String(value))}`;
   const lines = [
     `# ${label("Research record report", "研究记录报告")}`,
     label("Original recorded evidence; not an analysis, matched evaluation or acceptance receipt.", "原始记录证据；不是分析、同条件评测或验收回执。"),
@@ -29,14 +29,14 @@ export function exportResearchReport(input: ResearchRecordExport, zh: boolean): 
       "筛选可能匹配已保存的展示翻译；以下记录保留原始语言与版本。记录时间不是执行时间。引用是标识，不包含其源文件。请按原研究的隐私范围保管本报告。"),
   ];
   snapshot.records.forEach((record, index) => {
-    lines.push(`## ${index + 1}. ${inline(record.title)}`, field(label("Recorded at", "记录时间"), record.recorded_at),
+    lines.push(`## ${index + 1}. ${researchReportInline(record.title)}`, field(label("Recorded at", "记录时间"), record.recorded_at),
       field(label("Recorded status", "记录状态"), record.status),
-      `### ${label("Original text", "原文")}`, record.summary ? literal(record.summary) : missing);
-    if (record.blocked_reason) lines.push(`### ${label("Blocked reason", "受阻原因")}`, literal(record.blocked_reason));
+      `### ${label("Original text", "原文")}`, record.summary ? researchReportLiteral(record.summary) : missing);
+    if (record.blocked_reason) lines.push(`### ${label("Blocked reason", "受阻原因")}`, researchReportLiteral(record.blocked_reason));
     if (record.measurements?.length) {
       lines.push(`### ${label("Native measurements", "原生测量")}`);
       for (const measurement of record.measurements) {
-        lines.push(`#### ${inline(measurement.metric)}`,
+        lines.push(`#### ${researchReportInline(measurement.metric)}`,
           field(label("Value", "数值"), measurement.value === null ? label("Unknown", "未知") : measurement.value),
           field(label("Unit", "单位"), measurement.unit),
           field(label("Direction", "方向"), measurement.higher_is_better ? label("Higher is better", "越高越好") : label("Lower is better", "越低越好")),
@@ -52,8 +52,8 @@ export function exportResearchReport(input: ResearchRecordExport, zh: boolean): 
       if (record[key]) lines.push(field(key, record[key]));
     }
     lines.push(field(label("Recorded confidence", "记录置信度"), record.confidence));
-    lines.push(record.evidence_refs.length ? literal(record.evidence_refs.join("\n")) : label("No evidence references recorded.", "未记录证据引用。"));
-    if (record.execution_observation) lines.push(`### ${label("Recorded execution observation", "记录的执行观察")}`, literal(JSON.stringify(record.execution_observation, null, 2)));
+    lines.push(record.evidence_refs.length ? researchReportLiteral(record.evidence_refs.join("\n")) : label("No evidence references recorded.", "未记录证据引用。"));
+    if (record.execution_observation) lines.push(`### ${label("Recorded execution observation", "记录的执行观察")}`, researchReportLiteral(JSON.stringify(record.execution_observation, null, 2)));
   });
   return lines.join("\n\n") + "\n";
 }

@@ -12,7 +12,10 @@ from ...install_contract import render_host_cli_command
 from ..effect_runtime import EffectRuntimeRejected, effect_runtime_result
 from ..settlement_driver import decode_settlement_result
 from .accounting_admission import quota_accounting_admission
-from .error_codes import HeartbeatReceiptIdentityConflictError
+from .error_codes import (
+    HeartbeatReceiptIdentityConflictError,
+    MalformedSettlementStateError,
+)
 from .effect_program import (
     SETTLEMENT_IDENTITY_SCHEMA_VERSION,
     SETTLEMENT_PLAN_SCHEMA_VERSION,
@@ -418,6 +421,8 @@ def _read_heartbeat_settlement_payload(
         except EffectRuntimeRejected as exc:
             if exc.diagnostic_code == "heartbeat_receipt_identity_conflict":
                 raise HeartbeatReceiptIdentityConflictError(str(exc)) from None
+            if exc.diagnostic_code == "malformed_settlement_state":
+                raise MalformedSettlementStateError(str(exc)) from None
             raise ValueError(str(exc)) from None
 
     if source_admission is not None:

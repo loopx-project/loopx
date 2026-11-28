@@ -69,6 +69,7 @@ def workflow_run(workflow: str, step: str) -> str:
 def fixture_recovery_contract(workflow: str, identity: release_artifacts.ReleaseIdentity) -> None:
     paths = (
         "examples/personal-workspace-browser/fixture.mjs",
+        "examples/personal-workspace-browser/chat-recovery.mjs",
         "examples/personal-workspace-browser/typed-actions.mjs",
         "examples/personal-workspace-browser/goal-work-map.mjs",
         "examples/personal-workspace-browser/goal-workspace-m2.mjs",

@@ -602,8 +602,28 @@ def test_url_is_json_data_and_normalized_before_navigation(configured):
     url = 'https://example.com/?q=";process.exit();//'
     script = reader._script(config, url)
     assert "requestedUrl=" + json.dumps(url) in script
-    assert "await p.goto(target.href)" in script
+    assert "await p.goto(target.href,{waitUntil:'domcontentloaded'})" in script
     assert script.index("new URL(requestedUrl)") < script.index("await p.goto(")
+
+
+def test_navigation_uses_domcontentloaded_before_semantic_readiness_wait(configured):
+    import shutil
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("Node required for navigation option check")
+    config = reader.ReaderConfig.from_environment()
+    script = reader._script(config, URL)
+    harness = (
+        f"const source={json.dumps(script)};const spaceId={json.dumps(config.task_space)};"
+        "let gotoOptions=null;"
+        f"const page={{async goto(url,opts){{gotoOptions=opts;}},async waitForFunction(){{}},async evaluate(fn,arg){{return {{url:arg.url,title:'Article',text:'Loaded text',truncated:false,image_count:0,images:[]}};}}}};"
+        "async function listTaskSpaces(){return [{id:spaceId,ownership:'agent'}];}"
+        "async function taskSpace(){return {page(){return page;}};}"
+        "(async()=>{await eval('(async()=>{'+source+'})()');console.log('GOTO_OPTS:'+JSON.stringify(gotoOptions));})();"
+    )
+    res = subprocess.run([node, "-e", harness], capture_output=True, text=True, check=True, timeout=10)
+    opts = json.loads(next(ln.split(":", 1)[1] for ln in res.stdout.splitlines() if ln.startswith("GOTO_OPTS:")))
+    assert opts == {"waitUntil": "domcontentloaded"}
 
 
 def png(width=2, height=2):

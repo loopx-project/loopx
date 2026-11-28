@@ -102,8 +102,37 @@ the opt-in. The wake receipt records successful hook discovery.
 Use the same pinned task, model, reasoning effort, time and evaluator in
 comparison arms. The benchmark adapter still owns feedback, final submission,
 and scoring. EdgeBench's SForge auto-resume remains a provider-specific part of
-its official profile. Use a fresh trial with the option omitted for a
-single-pass Codex baseline.
+its official profile. Use a fresh trial with the option omitted for a single-pass Codex baseline.
+
+To run the stronger counterfactual Stop-hook checklist baseline (opt-in and
+default-off), add `official_stop_hook_mode: "todo_checklist"` alongside
+`execution_mode: plain` and `official_stop_hook: true` (`"simple"` selects the
+original prompt-less Stop hook; invalid modes or pairing with non-`plain` /
+`official_stop_hook: false` fail validation before host preparation). When
+`todo_checklist` is selected, the worker stages a physical trial-local
+`baseline-todo/TODO.md` inside `LOOPX_CODEX_HOME` (never inside the workspace
+git repository, keeping patches and `git status` unpolluted), appends checklist
+and regression-verification guidance to the initial prompt, and checks that
+checklist on `Stop`: blocking continuation with unchecked item summaries while
+open items remain or no items are checked, and allowing completion (`{}`) once
+every item is marked `[x]`. Omitting `official_stop_hook_mode` leaves `plain`
+and `official_stop_hook: true` behavior, hooks, prompts, and existing receipt
+fields unchanged.
+
+### Control-plane overhead and tax telemetry
+
+Using local monotonic timings (with zero extra RPCs), worker wake receipts and
+Harbor phase `context.metadata` record `hook_prepare_seconds`,
+`control_overhead_seconds`, `work_wall_seconds`, `control_tax_ratio`
+(`control_overhead_seconds / (control_overhead_seconds + work_wall_seconds)`,
+summed cleanly across phase wakes without averaging ratios),
+`control_telemetry_verified`, and `control_telemetry_status` (`verified`,
+`missing_receipt`, or `untimed_receipt`). Missing, corrupt, or untimed current-phase
+receipts retain observed preparation/control seconds while leaving
+`work_wall_seconds` and `control_tax_ratio` as `null` (`control_telemetry_verified: false`)
+rather than synthesizing `0.0` work time or `1.0` control tax. Both LoopX
+heartbeat/context-delivery arms and Stop-hook counterfactual baseline arms emit
+these fields so net-of-tax outcomes can be compared directly.
 
 ### Historical heartbeat formats
 

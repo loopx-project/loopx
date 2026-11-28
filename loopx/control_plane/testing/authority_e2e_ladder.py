@@ -2,10 +2,10 @@
 
 One ladder, one row per completed RFC stage claim, one exit policy: the run
 is green only when every selected row passed. A row that cannot run in this
-environment (no PostgreSQL, no NoKV stack, no POSIX signals) reports
-``unverified`` and, unless ``--allow-unverified`` is given, the ladder exits
-non-zero. Future obligations may be declared as ``pending`` so the report never
-silently claims them.
+environment (no NoKV stack, no POSIX signals) reports ``unverified`` and,
+unless ``--allow-unverified`` is given, the ladder exits non-zero. Future
+obligations may be declared as ``pending`` so the report never silently claims
+them.
 
 Rows drive the product through ``python -m loopx.cli`` (``real_cli``) or run
 the retained store-level probes (``store_direct``); this module adds no
@@ -64,7 +64,6 @@ STAGES: tuple[str, ...] = ("0", "1", "2a", "2b")
 PRODUCT_PATHS: tuple[str, ...] = ("real_cli", "store_direct")
 GATES: tuple[str, ...] = (
     "deterministic",
-    "env:postgresql",
     "env:nokv_authority",
 )
 ROW_STATUSES: tuple[str, ...] = ("pass", "fail", "unverified")
@@ -73,7 +72,6 @@ EXIT_POLICY_RULE = (
     "and (unverified == 0 or allow_unverified) and (pending == 0 or allow_pending)"
 )
 
-POSTGRES_URL_VARIABLE = "LOOPX_TEST_POSTGRES_URL"
 # Stage 2A qualification inputs: the probe writes durable test data into an
 # existing workbench, so it needs an explicit opt-in flag plus the ignored
 # client configuration file, the Python executable that resolves the qualified
@@ -90,11 +88,9 @@ NOKV_AUTHORITY_VARIABLES: tuple[str, ...] = (
 LIVE_OPT_IN_FLAGS: tuple[str, ...] = (NOKV_AUTHORITY_LIVE_FLAG,)
 GATE_REQUIREMENTS: dict[str, tuple[str, ...]] = {
     "deterministic": (),
-    "env:postgresql": (POSTGRES_URL_VARIABLE,),
     "env:nokv_authority": (NOKV_AUTHORITY_LIVE_FLAG, *NOKV_AUTHORITY_VARIABLES),
 }
 GATE_UNVERIFIED_REASON: dict[str, str] = {
-    "env:postgresql": "postgres_url_missing",
     "env:nokv_authority": "nokv_authority_env_missing",
 }
 
@@ -102,9 +98,6 @@ LOCAL_CONFORMANCE_TESTS = {
     "file": Path("tests/control_plane_ts/authority_store.test.ts"),
     "sqlite": Path("tests/control_plane_ts/sqlite_authority_store.test.ts"),
 }
-PG_INTEGRATION_TEST = (
-    Path("tests") / "control_plane_ts" / "postgresql_authority_store.integration.test.ts"
-)
 NOKV_QUALIFICATION_SCRIPT = Path("examples") / "nokv-authority-store" / "live-qualification.ts"
 NOKV_HELPER = Path("loopx") / "control_plane" / "coordination" / "nokv_jsonl_helper.py"
 NOKV_QUALIFICATION_REPORT_SCHEMA = "loopx_nokv_authority_live_qualification_v0"
@@ -121,14 +114,12 @@ PROBE_SOURCES: tuple[Path, ...] = (
     *LOCAL_CONFORMANCE_TESTS.values(),
     Path("tests/control_plane_ts/authority_store_conformance.ts"),
     TS_READBACK_PROBE,
-    PG_INTEGRATION_TEST,
     NOKV_QUALIFICATION_SCRIPT,
     NOKV_HELPER,
     Path("loopx") / "control_plane" / "testing" / "authority_e2e_ladder.py",
     Path("loopx") / "control_plane" / "testing" / "authority_e2e_fixtures.py",
     Path("loopx") / "control_plane" / "testing" / "authority_e2e_row_support.py",
 )
-MINIMUM_POSTGRES_TAP_PASSES = 9
 @dataclass(frozen=True)
 class LadderRow:
     id: str
@@ -432,58 +423,6 @@ def _row_nokv_live_qualification(context: RowContext) -> RowOutcome:
 
 
 # ---------------------------------------------------------------------------
-# Stage 2B: PostgreSQL candidate conformance against a live database
-# ---------------------------------------------------------------------------
-
-
-def _pg_package_version() -> str | None:
-    manifest = REPO_ROOT / "node_modules" / "pg" / "package.json"
-    if not manifest.exists():
-        return None
-    try:
-        version = json.loads(manifest.read_text(encoding="utf-8")).get("version")
-    except (OSError, ValueError, AttributeError):
-        return None
-    return str(version) if version else None
-
-
-def _row_postgresql_conformance_live(context: RowContext) -> RowOutcome:
-    node = node_executable()
-    if node is None:
-        return unverified("node_missing")
-    pg_version = _pg_package_version()
-    if pg_version is None:
-        return unverified("pg_dependency_missing")
-    summary = tap_summary(
-        [
-            node,
-            "--no-warnings",
-            "--experimental-strip-types",
-            *node_typescript_flags(),
-            "--test",
-            "--test-reporter=tap",
-            str(PG_INTEGRATION_TEST),
-        ],
-        env=context.environ,
-        timeout=900,
-    )
-    expect(summary.failed == 0, "PostgreSQL conformance must report zero TAP failures")
-    expect(summary.skipped == 0, "PostgreSQL conformance must not skip; the URL was not honoured")
-    expect(
-        summary.passed is not None and summary.passed >= MINIMUM_POSTGRES_TAP_PASSES,
-        "PostgreSQL conformance must pass the conformance suite plus provider tests",
-    )
-    expect(summary.returncode == 0, "node test runner must exit 0")
-    return passed(
-        tap_pass=summary.passed,
-        tap_fail=summary.failed,
-        tap_skipped=summary.skipped,
-        postgres_url_sha256_prefix=sha256_hex(context.environ.get(POSTGRES_URL_VARIABLE, ""))[:12],
-        pg_package_version=pg_version,
-    )
-
-
-# ---------------------------------------------------------------------------
 # Registry
 # ---------------------------------------------------------------------------
 
@@ -525,18 +464,21 @@ LADDER_ROWS: tuple[LadderRow, ...] = (
         posix_only=False,
         run=_row_nokv_live_qualification,
     ),
-    LadderRow(
-        id="s2b.postgresql_conformance_live",
-        stage="2b",
-        title="PostgreSQL candidate passes the conformance suite against a live database",
-        product_path="store_direct",
-        gate="env:postgresql",
-        posix_only=False,
-        run=_row_postgresql_conformance_live,
-    ),
 )
 
-PENDING_ROWS: tuple[PendingRow, ...] = ()
+PENDING_ROWS: tuple[PendingRow, ...] = (
+    PendingRow(
+        id="s2b.postgresql_conformance_live",
+        stage="2b",
+        pending_until=(
+            "private/licensed loopx-project/loopx-cloud "
+            "(npm run test:postgresql-authority-store / "
+            "npm run test:postgresql-authority-service); "
+            "public self-hosted baseline frozen at v2.4.0 "
+            "(tag 5037daecee, commit a6ffb3be6e)"
+        ),
+    ),
+)
 
 
 def row_by_id(row_id: str) -> LadderRow:
@@ -575,7 +517,7 @@ def default_forbidden_tokens(roots: Iterable[Path], environ: Mapping[str, str]) 
     tokens.update({str(temp_root), str(temp_root.resolve())})
     tokens.add(environ.get("HOME") or str(Path.home()))
     tokens.update({str(REPO_ROOT), str(REPO_ROOT.resolve())})
-    for name in (POSTGRES_URL_VARIABLE, *NOKV_AUTHORITY_VARIABLES):
+    for name in NOKV_AUTHORITY_VARIABLES:
         value = environ.get(name)
         if value:
             tokens.add(value)
@@ -727,15 +669,12 @@ def collect_bindings(environ: Mapping[str, str]) -> JsonObject:
 
     commit = _git_output("rev-parse", "HEAD")
     status = _git_output("status", "--porcelain")
-    postgres_url = environ.get(POSTGRES_URL_VARIABLE)
     return {
         "loopx_commit": commit.strip() if commit else None,
         "loopx_tree_dirty": bool(status.strip()) if status is not None else None,
         "probe_sha256": _probe_digests(),
         "nokv_client_config_sha256": _nokv_client_config_digest(environ),
         "nokv_sdk_version": _nokv_sdk_version(),
-        "postgres_url_sha256_prefix": sha256_hex(postgres_url)[:12] if postgres_url else None,
-        "pg_package_version": _pg_package_version(),
     }
 
 
@@ -981,7 +920,6 @@ __all__ = [
     "NOKV_AUTHORITY_VARIABLES",
     "NOKV_AUTHORITY_WORKBENCH_VARIABLE",
     "PENDING_ROWS",
-    "POSTGRES_URL_VARIABLE",
     "PRODUCT_PATHS",
     "REPORT_SCHEMA",
     "ROW_STATUSES",

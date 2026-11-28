@@ -126,6 +126,10 @@ and unchanged head, and refresh the review packet (Drafts are excluded from the
 review queue). A reviewer must obey the packet's action authority and may not
 mark another author's Draft ready without authorization. Keep exact-head review,
 required validation, first-screen evidence and merge authorization separate.
+Agents/subagents must not wait on or poll remote CI during development, review or
+readiness when local gates pass (`wait_for_ci=false`); see
+[local-first CI](docs/development/testing-and-quality.md#local-first-premerge-gate-vs-asynchronous-ci--本地优先门禁与异步-ci)
+and [two-tier CI](docs/development/ci-impact-selection.md).
 
 ### DCO Sign-Off
 

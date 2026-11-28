@@ -125,7 +125,7 @@ def resolve_external_capability_binding(
             f"multiple enabled, doctor-ready external providers expose "
             f"`{capability_id}`: {providers}"
         )
-    extension_id, capability, profile = matches[0]
+    extension_id, matched_capability, profile = matches[0]
     operation_profile = _operation_from_profile(profile, operation)
     permission = _token(
         operation_profile.get("required_permission"),
@@ -143,7 +143,7 @@ def resolve_external_capability_binding(
         "capability_id": capability_id,
         "operation": deepcopy(operation_profile),
         "integration_profile_digest": _token(
-            capability.get("integration_profile_digest"),
+            matched_capability.get("integration_profile_digest"),
             "external capability integration_profile_digest",
         ),
     }

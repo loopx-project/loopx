@@ -61,7 +61,7 @@ export function ChannelHeader({
   managerRuntime?: ManagerRuntimeSessionReadback | null;
   mobileNavigationOpen?: boolean;
   onOpenGoalCapabilities?: () => void;
-  onOpenGoalDetails?: () => void;
+  onOpenGoalDetails?: (openingControl: HTMLButtonElement) => void;
   onOpenAllWork?: () => void;
   allWorkOpen?: boolean;
   onOpenManagerChat?: () => void;

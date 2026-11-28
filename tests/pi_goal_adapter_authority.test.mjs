@@ -29,7 +29,7 @@ childProcess.execFile = Object.assign(() => {}, {
   }),
 });
 syncBuiltinESMExports();
-const { default: extension } = await import("../loopx/pi_goal_mode/loopx-goal.ts");
+const { default: extension } = await import("../loopx/hosts/pi/loopx-goal.ts");
 
 function packet(capabilities = ["task_lease_v0"]) {
   return {

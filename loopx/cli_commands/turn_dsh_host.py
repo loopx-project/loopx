@@ -5,11 +5,11 @@ from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any
 
-from ..dsh_goal_mode.turn_host_adapter import DshHostConfig, run_dsh_host
+from ..hosts.dsh.turn_host_adapter import DshHostConfig, run_dsh_host
 from ..control_plane.goals.first_party_host_admission import FirstPartyHostGoalAdmission
 from ..control_plane.turn_driver.execution_profile import managed_execution_profile
 from ..control_plane.turn_driver.host_binding import dsh_output_token_budget
-from ..dsh_goal_mode.turn_host_adapter import resolve_dsh_home
+from ..hosts.dsh.turn_host_adapter import resolve_dsh_home
 from ..control_plane.operator_credential import (
     OPERATOR_CREDENTIAL_ENV_VARS,
     OPERATOR_ENDPOINT_ENV_VAR,

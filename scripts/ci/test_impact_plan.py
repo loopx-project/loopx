@@ -13,11 +13,23 @@ from impact_plan import Change, POLICY_PATHS, candidate, job_flags
 class ImpactTests(unittest.TestCase):
     def test_whole_pr_job_requirements_are_owned_by_the_change_kind(self):
         self.assertEqual(job_flags("presentation"), {
-            "core_tests": True, "backend_tests": False, "python_tests": False,
+            "core_tests": True, "backend_tests": False, "frontend_tests": True,
+            "compat_tests": False, "python_tests": False,
+            "stage2c_tests": False, "presentation_tests": True,
+        })
+        self.assertEqual(job_flags("backend"), {
+            "core_tests": True, "backend_tests": True, "frontend_tests": False,
+            "compat_tests": False, "python_tests": False,
+            "stage2c_tests": False, "presentation_tests": False,
+        })
+        self.assertEqual(job_flags("mixed"), {
+            "core_tests": True, "backend_tests": True, "frontend_tests": True,
+            "compat_tests": False, "python_tests": False,
             "stage2c_tests": False, "presentation_tests": True,
         })
         self.assertEqual(job_flags("full"), {
-            "core_tests": True, "backend_tests": True, "python_tests": True,
+            "core_tests": True, "backend_tests": True, "frontend_tests": True,
+            "compat_tests": True, "python_tests": True,
             "stage2c_tests": True, "presentation_tests": False,
         })
         self.assertFalse(any(job_flags("docs").values()))
@@ -36,21 +48,42 @@ class ImpactTests(unittest.TestCase):
                     self.assertEqual(candidate([Change(status, path)])[0], "docs")
         self.assertEqual(candidate([Change("M", path) for path in readmes])[0], "docs")
 
-    def test_one_shared_unknown_prompt_test_or_dependency_forces_full(self):
+    def test_backend_mixed_and_full_risk_tiering(self):
         for path in ("loopx/cli.py", "loopx/control_plane/goals/vision_checkpoint.ts",
                      "loopx/claude_goal_mode/commands/loopx.md", "tests/test_ui.py",
-                     "apps/presentation/dashboard/package-lock.json", "apps/presentation/dashboard/vite.config.ts",
-                     "apps/desktop/src/main.rs", "scripts/ci/impact_plan.py", ".github/workflows/python-tests.yml",
-                     "loopx/web/chat/backend.py", "loopx/web/chat/config.json", "unknown", "docs/build.py"):
-            with self.subTest(path=path):
+                     "AGENTS.md", "docs/build.py",
+                     "packages/dsh-loopx-plugin/src/cli.ts", "packages/loopx-ark-turn/tests/test_cli.py",
+                     "packages/dsh-loopx-plugin/smoke/dsh-legacy-host.package.json",
+                     "tests/fixtures/change_quality/oracles/typescript/package.json"):
+            with self.subTest(backend_path=path):
+                self.assertEqual(candidate([Change("M", path)])[0], "backend")
+                self.assertEqual(candidate([Change("M", "loopx/web/chat/index.html"), Change("M", path)])[0], "mixed")
+        self.assertEqual(candidate([Change("D", "loopx/code.py"), Change("A", "docs/code.md")])[0], "backend")
+        for path in ("apps/desktop/src/main.rs", "loopx/web/chat/backend.py", "loopx/web/chat/config.json"):
+            with self.subTest(mixed_or_non_presentation=path):
+                self.assertNotEqual(candidate([Change("M", "loopx/web/chat/index.html"), Change("M", path)])[0], "presentation")
+        for path in ("apps/presentation/dashboard/package-lock.json", "apps/presentation/dashboard/vite.config.ts",
+                     "apps/desktop/loopx-control-plane/src-tauri/Cargo.toml",
+                     "examples/dsh-loopx-demo/package.json",
+                     "packages/loopx-capability-benchmark-toolkit/pyproject.toml",
+                     "packages/loopx-jev/uv.lock",
+                     "packages/loopx-memt-turn/MANIFEST.in",
+                     "packages/dsh-loopx-plugin/package.json",
+                     "packages/dsh-loopx-plugin/pnpm-lock.yaml",
+                     "packages/dsh-loopx-plugin/pnpm-workspace.yaml",
+                     "scripts/ci/impact_plan.py", ".github/workflows/python-tests.yml",
+                     "pyproject.toml", "package-lock.json", "examples/shared-goal-authority-e2e/mutants.py",
+                     "packages/loopx-core/prepare.py", "unknown"):
+            with self.subTest(full_path=path):
+                self.assertEqual(candidate([Change("M", path)])[0], "full")
                 self.assertEqual(candidate([Change("M", "loopx/web/chat/index.html"), Change("M", path)])[0], "full")
 
-    def test_invalid_empty_non_pr_and_move_out_of_runtime_are_not_exempt(self):
+    def test_invalid_empty_and_non_pr_are_full(self):
         for changes in ([], [Change("T", "docs/a.md")], [Change("M", "docs/../code.md")],
-                        [Change("M", "/docs/a.md")], [Change("M", "docs//a.md")],
-                        [Change("D", "loopx/code.py"), Change("A", "docs/code.md")]):
+                        [Change("M", "/docs/a.md")], [Change("M", "docs//a.md")]):
             self.assertEqual(candidate(changes)[0], "full")
         self.assertEqual(candidate([Change("M", "docs/a.md")], pull_request=False)[0], "full")
+        self.assertEqual(candidate([Change("M", "loopx/cli.py")], pull_request=False)[0], "full")
 
     def test_real_git_policy_force_full_and_type_boundaries(self):
         script = str(Path(__file__).with_name("review_gate.py"))
@@ -111,11 +144,28 @@ class ImpactTests(unittest.TestCase):
             write("loopx/cli.py", "backend change")
             git("add", "loopx/cli.py")
             git("commit", "-qm", "earlier backend commit")
+            backend_only, _ = classify(before_backend)
+            self.assertEqual(backend_only["change_kind"], "backend")
+            self.assertTrue(backend_only["core_tests"])
+            self.assertTrue(backend_only["backend_tests"])
+            self.assertFalse(backend_only["frontend_tests"])
+            self.assertFalse(backend_only["compat_tests"])
+            self.assertFalse(backend_only["python_tests"])
+            self.assertFalse(backend_only["stage2c_tests"])
+            self.assertFalse(backend_only["presentation_tests"])
+            self.assertEqual(backend_only["python_shards"], 0)
+            forced_backend, _ = classify(before_backend, "--force-full")
+            self.assertEqual(forced_backend["change_kind"], "full")
+            self.assertEqual(forced_backend["python_shards"], 6)
+            self.assertTrue(forced_backend["compat_tests"])
             write(path, "later client change")
             git("commit", "-qam", "latest client commit")
             cumulative, _ = classify(before_backend)
-            self.assertEqual(cumulative["change_kind"], "full")
+            self.assertEqual(cumulative["change_kind"], "mixed")
             self.assertTrue(cumulative["backend_tests"])
+            self.assertTrue(cumulative["frontend_tests"])
+            self.assertTrue(cumulative["presentation_tests"])
+            self.assertFalse(cumulative["python_tests"])
             self.assertEqual({item["path"] for item in cumulative["changes"]}, {"loopx/cli.py", path})
             before_link = git("rev-parse", "HEAD")
             (root / "docs").mkdir()
@@ -159,6 +209,107 @@ class ImpactTests(unittest.TestCase):
             self.assertEqual(packet["change_kind"], "docs")
             self.assertFalse(packet["python_tests"])
             self.assertEqual(packet["python_shards"], 0)
+
+    def test_subpackage_dependency_manifests_require_full_under_trusted_policy(self):
+        script = str(Path(__file__).with_name("review_gate.py"))
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            env = {k: v for k, v in os.environ.items() if not k.startswith(("PYTEST", "COVERAGE", "COV_CORE"))}
+
+            def git(*args):
+                return subprocess.check_output(["git", *args], cwd=root, env=env, text=True).strip()
+
+            def write(path, content):
+                target = root / path
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_text(content)
+
+            git("init", "-q")
+            git("config", "user.name", "CI Fixture")
+            git("config", "user.email", "ci@example.invalid")
+            git("config", "core.hooksPath", str(root / "no-hooks"))
+            for policy in POLICY_PATHS:
+                write(
+                    policy,
+                    "jobs:\n  test-shard:\n    strategy:\n      matrix:\n        shard: [1, 2, 3, 4, 5, 6]\n"
+                    if policy.endswith(".yml")
+                    else "reviewed policy",
+                )
+            for manifest_path in (
+                "packages/loopx-capability-benchmark-toolkit/pyproject.toml",
+                "packages/dsh-loopx-plugin/package.json",
+                "packages/dsh-loopx-plugin/pnpm-lock.yaml",
+            ):
+                write(manifest_path, "initial")
+            git("add", ".")
+            git("commit", "-qm", "trusted base")
+
+            for manifest_path in (
+                "packages/loopx-capability-benchmark-toolkit/pyproject.toml",
+                "packages/dsh-loopx-plugin/package.json",
+                "packages/dsh-loopx-plugin/pnpm-lock.yaml",
+            ):
+                with self.subTest(manifest_path=manifest_path):
+                    base = git("rev-parse", "HEAD")
+                    write(manifest_path, f"updated {manifest_path}")
+                    git("add", "--", manifest_path)
+                    git("commit", "-qm", f"update {manifest_path}")
+                    plan_file = root / "plan.json"
+                    classified = subprocess.run(
+                        [sys.executable, script, "classify", "--base", base, "--head", "HEAD", "--plan", str(plan_file)],
+                        cwd=root,
+                        env=env,
+                        capture_output=True,
+                        text=True,
+                    )
+                    self.assertEqual(classified.returncode, 0, classified.stderr)
+                    packet = json.loads(plan_file.read_text())
+                    self.assertEqual(packet["change_kind"], "full")
+                    self.assertTrue(packet["core_tests"])
+                    self.assertTrue(packet["backend_tests"])
+                    self.assertTrue(packet["frontend_tests"])
+                    self.assertTrue(packet["compat_tests"])
+                    self.assertTrue(packet["python_tests"])
+                    self.assertTrue(packet["stage2c_tests"])
+                    self.assertFalse(packet["presentation_tests"])
+                    self.assertEqual(packet["python_shards"], 6)
+                    outputs = {
+                        "change_kind": packet["change_kind"],
+                        **{
+                            key: str(bool(packet[key])).lower()
+                            for key in (
+                                "core_tests", "backend_tests", "frontend_tests",
+                                "compat_tests", "python_tests", "stage2c_tests", "presentation_tests",
+                            )
+                        },
+                    }
+                    all_full = {
+                        "changes": {"result": "success", "outputs": outputs},
+                        "checks": {"result": "success"},
+                        "pytest": {"result": "success"},
+                        "node-minimum-compatibility": {"result": "success"},
+                        "stage2c-correctness-e2e": {"result": "success"},
+                        "windows-powershell": {"result": "success"},
+                        "presentation": {"result": "skipped"},
+                    }
+                    ok = subprocess.run(
+                        [sys.executable, script, "verify"],
+                        cwd=root,
+                        env={**env, "NEEDS_JSON": json.dumps(all_full)},
+                        capture_output=True,
+                        text=True,
+                    )
+                    self.assertEqual(ok.returncode, 0, ok.stderr)
+                    for blocked in ("pytest", "node-minimum-compatibility", "stage2c-correctness-e2e", "windows-powershell"):
+                        skipped_needs = {**all_full, blocked: {"result": "skipped"}}
+                        bad = subprocess.run(
+                            [sys.executable, script, "verify"],
+                            cwd=root,
+                            env={**env, "NEEDS_JSON": json.dumps(skipped_needs)},
+                            capture_output=True,
+                            text=True,
+                        )
+                        self.assertNotEqual(bad.returncode, 0, blocked)
 
 
 if __name__ == "__main__":

@@ -168,6 +168,19 @@ Host 承担记账；必要的权限、预算、不确定性与恢复决策仍在
 可选 provider 发行物继续遵守 `packages/<package-id>/` 惯例；capability 包这一行不要求每个 provider
 都创建一个 capability。
 
+[本地 Workspace wheel](../../../packages/loopx-workspace/README.md) 为同版本的
+`loopx-core` 加装 Chat、Dashboard 和已有的端点管理命令。它附带经过验证的浏览器资源，
+并打开 Core 原先使用的 registry 和运行时状态。服务由用户显式启动。Core 帮助和任务执行
+不会加载 Workspace，工作区在收到研究分析请求时才加载评估执行器。打包验收覆盖 File
+和 SQLite 上由 Core 完成并独立验收的任务、安装和重启 Workspace 后的读回，以及卸载后
+从 Core 重放原结果。原生 App、IM 和公开拆包发布仍需各自完成 R2/M3 验收。
+
+管家的原生会话、监控和报告适配器，以及托管会话的日历，使用 Workspace 的原会话存储，
+随 Workspace 发行，复用 Core 的命令解析和执行入口。独立 Core 在 Turn 开始时通过共用收件箱
+发现待处理的请求和结果。
+普通 Agent 通过同一实现提交、接受协作请求并回传结果。回传到 Workspace 原会话时才使用
+对应的会话存储。加装或卸载 Workspace 时，收件箱读取入口及回执继续沿用原有作用域和身份。
+
 权威不移动：内核仍是 Goal/Todo/claim/lease/quota/effect 状态的唯一写者。capability 包只能通过 `CapabilityRegistry` 注册 provider、capability 契约和 CLI 子命令，绝不 import 内核私有模块。
 
 ### 治理与运行时所有权
@@ -265,6 +278,14 @@ import 方向、剩余兼容接缝和从失败定位 owner 的路径。每个发
 把无关职责塞进一个文件来满足预算不构成成功重构。代表性修改局部性与安装成本
 分别测量。
 
+独立 Core 保留 benchmark 目录及其引用的四臂实验契约。同版本的
+[Benchmark Toolkit wheel](../../../packages/loopx-capability-benchmark-toolkit/README.md)
+包含既有执行模块和 CLI 适配器。能力目录根据同版本安装文件报告可用性，常规发现
+不会加载执行模块。显式 benchmark 命令或经范围校验的 Workspace 分析请求使用原有
+工具包。安装和卸载保留既有任务及分析记录。普通发行物继续包含同一实现。已测试的
+工具包流程验证了 D2 的这项打包边界。具体 benchmark 家族的执行、公开发布和模型可见
+开销仍分别验收。
+
 ### 状态模型与 schema
 
 不改任何规范记录。唯一新增的持久产物是架构 fixture：
@@ -307,9 +328,39 @@ capability 包直接采用现有 `extension.toml` 契约，不做扩展。唯一
 4. **提供上下文：** 为所选工作和 executor 渲染现有受治理工作契约，复用统一 Controller/Executor
    设计的首次完整、后续差量与恢复语义。Required reads 和来源完整性仍有约束力。
 
+内置 Host 启动的 Worker 收到任务要求、权限范围和原始依据的读取路径。Todo 写入命令模板
+和普通执行模式的扣额说明留在外层执行器持有的完整 capture 中，标准工作段与所有者阻塞时
+的 Worker 报告及独立继续要求则经由已校验来源投影保留给 Worker（自定义规则及非普通模式
+保留原规则原文）。Worker 仍能读取工作、
+修复和停止条件。未配置的记忆召回和没有结果的启动前观察只向 Worker 提供带作用域的
+当前状态，完整回执留在原始 capture 中。有实际结果、失败、必读材料或未知字段时，
+Worker 仍会收到对应内容。
+
+工作上下文携带选中的任务、作用域内的 User Todo 和读取依据。两种已登记的 Todo 读取
+格式都把字段表留在 canonical Todo 读取入口。已有 capture 仍可按原摘要读取。
+
+普通任务准入后，Worker 收到当前任务、范围与验证要求。完全一致的就绪租约记录留在
+启动和结算入口，未就绪、有差异或格式未知的记录仍在任务视图中可见。
+操作方通过 quota/status 或原始 capture 读取发布资格和已完成工作的维护提醒。
+任务上下文省略这些维护指令。
+
 相关来源/要求版本变化、Session generation 变化、compaction 或 ACK 丢失时，必须使上下文复用失效。
 不能因为 packet 更小，就认为 executor 已掌握前文。连续性未知时走所属契约的恢复路径。
 Capability 指令仅在适用时提供；authority 不能从 prompt 文字推导。
+
+Standard CLI 装配有三个可从源码构建的能力 wheel 候选，即
+`loopx-capability-agent-turn-recall`、`loopx-capability-pull-request-review`
+和 `loopx-capability-issue-fix`。用 `loopx-core[standard]` 一次安装三个能力，也可分别安装。
+这个 extra 将三个包锁定到 Core 的同一版本。Core 与各可选包
+各自拥有互不重叠的文件，沿用既有能力 ID、配置和运行时 owner。独立 provider 包仍按
+上文公共能力边界接入。
+
+能力发现只读取元数据。安装召回包后按既有 Goal/Agent 设置显式启用，结果入库沿用
+自身的恢复路径。显式调用 `pr-review` 时复用精确 head 队列与 checkpoint。在 Core 装配
+中显式选择 Issue 修复后，才加载相应 workflow 并提供原有候选准入。普通 Core 目标预览
+省去这组专用命令。通用 PR 等待观察和已确认评审的核对留在 Core，只有实际观察或核对时
+才加载公开 PR 生命周期代码。卸载可选包保留既有工作和 checkpoint。完整 Standard
+工作区和拆包发布仍需验收。
 
 可选 observer 消费已提交事件或有界投影。除非现有契约明确要求它的 receipt，
 其延迟不能进入准入/结算事务。只批处理尽力而为的 telemetry；不能为满足时间目标而延迟
@@ -344,6 +395,18 @@ Operation provider 必须说明某个 effect 能否核对、能否安全重试�
 结果验收、传输交付、用户回读也必须保留现有的不同证据。
 
 ### 产品与 benchmark 执行
+
+在独立 Core 中，`loopx-capability-research` 以 **Explore** 为主工作流（将
+Explore 重编排、多分支/前沿规划、harness 与回放运行时、来源对账及 `explore` CLI 移出
+Core），并与独立 `deepresearch` 证据账本和 `external-evidence` 取证命令一并发行。Core
+仅保留 Explore 的结果事件契约、轻量投影、机器/Goal 配置适配与既有 Goal 权限和结算校验
+（裸 Core 常规 Turn 保持惰性加载、不依赖该包），且研究包不增加新的 Goal 写入权限。已获父级
+明确采纳的 `external-evidence` 可通过显式证据插件入口向已启用的同 Goal Explore 节点写入
+经净化的公共安全引用（不自动执行外部 provider）；`deepresearch` 引用报告提供单向、幂等、
+只读导出（`explore import-citations`），已保存的本地路径、私有来源与报告正文留在
+`.loopx/deepresearch/` 原权限边界内，进入 Goal 图谱的内容仅限净化引用，且原账本完全不被
+反写。Core 目录将 `explore`、`deep-research` 与 `external-evidence-research` 绑定到
+`loopx-capability-research`，复用现有包归属、惰性命令发现与安装诊断接口暴露版本/缺件状态。
 
 遵守 [长程研究计划](long-horizon-harness-benchmark-research-program-v0.zh-CN.md)：
 native/plain 对照、被动观测、受治理执行与 ablation 具有明确身份。
@@ -414,8 +477,12 @@ parsing、global options、输出、错误与 exit code 合格；不兼容版本
 继续前验证新 owner 与解析后的装配；不能跨活跃 lease 热切换。回滚同样先核对并保留持久状态。
 后续不可逆数据变化须另设迁移/导出门槛。
 
-这些结构/装配变化的回滚不需要数据迁移。默认值变化须有明确 owner 决策与 release notes；
-本提案不改变现有默认值。
+这些结构/装配变化的回滚不需要数据迁移。对于已有的独立 `.loopx/deepresearch/` 账本，
+未结束的研究会话可继续使用原有 `deepresearch status|add-source|resolve-question|close|report`
+命令完成闭环与归档，也可按需通过只读单向导出把已授权引用投影为同 Goal Explore 的净化引用，
+原账本与报告保留可读与完整回滚路径。卸载 `loopx-capability-research` 后保留 Goal
+权限、Explore 事件日志与独立研究账本，可平滑回退至裸 Core，重装同版本包即可续作。
+默认值变化须有明确 owner 决策与 release notes；本提案不改变现有默认值。
 
 ## 9. 验证与验收
 

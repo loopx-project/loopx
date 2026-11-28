@@ -175,11 +175,22 @@ class ChatIngressStore:
                 }
             return None
 
+        failed = getattr(self, "_last_read_error_paths", None)
+        if isinstance(failed, dict):
+            failed.pop(session_id, None)
         paths = (path for path in turns_dir.glob("*.json") if not path.name.endswith(".events.json"))
         fresh: dict[Path, dict[str, Any]] = {}
 
         def read_current(path: Path) -> dict[str, Any]:
-            payload = read(path)
+            try:
+                payload = read(path)
+            except Exception:
+                failed_map = getattr(self, "_last_read_error_paths", None)
+                if not isinstance(failed_map, dict):
+                    failed_map = {}
+                    setattr(self, "_last_read_error_paths", failed_map)
+                failed_map[session_id] = path
+                raise
             fresh[path] = payload
             return payload
 

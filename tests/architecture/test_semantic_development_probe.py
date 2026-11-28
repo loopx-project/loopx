@@ -328,6 +328,7 @@ PROBE_CLI_FILES = (
     "loopx/__init__.py",
     "loopx/semantics/__init__.py",
     "loopx/semantics/inventory.py",
+    "loopx/semantics/inventory_reports.py",
     "loopx/semantics/development_probe.py",
     "loopx/semantics/consumer_report.py",
     "loopx/semantics/field_use.py",

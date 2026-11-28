@@ -15,7 +15,7 @@
       "dict_any_count": 0
     },
     "loopx/canary/planner.py": {
-      "any_count": 22,
+      "any_count": 0,
       "dict_any_count": 0
     },
     "loopx/capabilities/benchmark_toolkit/experiment_board.py": {
@@ -147,6 +147,11 @@
     "loopx/extensions/lark/presentation/kanban.py": {
       "any_count": 62,
       "dict_any_count": 0
+    },
+    "loopx/global_registry.py": {
+      "any_count": 0,
+      "dict_any_count": 0,
+      "lines": 1047
     },
     "loopx/heartbeat_prompt.py": {
       "any_count": 0,

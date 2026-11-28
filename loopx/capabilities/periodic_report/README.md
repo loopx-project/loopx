@@ -206,7 +206,8 @@ the current vision must close through an evidence-linked material checkpoint,
 and the Goal must either become terminal or durably settle the existing
 `vision_successor_required` transition into a successor vision and owned
 frontier. The `evaluate-runtime-trigger` command promotes only that derived
-success-path receipt into `bounded_segment_milestone`.
+success-path receipt into `bounded_segment_milestone`. It rejects a segment if
+it exceeds `window_seconds`, including by a fraction of a second.
 
 No Todo predeclaration or separate Stage lifecycle is required. Todo count,
 elapsed time, ordinary completion, and blocker/stall/long-chain/monitor replans

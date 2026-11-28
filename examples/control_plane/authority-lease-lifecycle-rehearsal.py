@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Replay a read-only Goal snapshot through an immutable legacy and three providers.
+"""Replay a read-only Goal snapshot through an immutable legacy and local providers.
 
 Only disposable copies receive a synthetic open Todo/lease and mutations. The
 report contains counts, source/observation digests and explicit semantic deltas;
-source text, actor IDs, paths and connection strings are never printed.
+source text, actor IDs and paths are never printed.
 """
 from __future__ import annotations
 
@@ -26,12 +26,11 @@ from loopx.state_refresh import resolve_goal_state  # noqa: E402
 
 NODE_REHEARSAL = r"""
 import assert from 'node:assert/strict';
-import {createHash, randomUUID} from 'node:crypto';
+import {createHash} from 'node:crypto';
 import {mkdtemp, mkdir, readFile, rm, writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {pathToFileURL} from 'node:url';
-import {Pool} from 'pg';
 let raw=''; for await (const chunk of process.stdin) raw+=chunk;
 const input=JSON.parse(raw);
 const moduleAt=(root,path)=>import(pathToFileURL(join(root,'loopx/control_plane',path)).href);
@@ -42,10 +41,9 @@ const {executeTaskLeaseLifecycle: legacy}=await moduleAt(input.baseline_repo,'wo
 const {executeCoordinationTodoUpdate: update}=await moduleAt(input.repo,'coordination/todo_update.ts');
 const {FileAuthorityStore}=await moduleAt(input.repo,'coordination/file_authority_store.ts');
 const {SqliteAuthorityStore}=await moduleAt(input.repo,'coordination/sqlite_authority_store.ts');
-const {PostgreSqlAuthorityStore,installPostgreSqlAuthorityStoreSchema}=await moduleAt(input.repo,'coordination/postgresql_authority_store.ts');
 const {selectLocalSqliteAuthority}=await moduleAt(input.repo,'coordination/local_authority_provider.ts');
 const {coordinationTodoReadModel}=await moduleAt(input.repo,'coordination/coordination_projection.ts');
-const {canonicalAuthorityBytes,canonicalAuthoritySha256}=await moduleAt(input.repo,'coordination/authority_store_codec.ts');
+const {canonicalAuthoritySha256}=await moduleAt(input.repo,'coordination/authority_store_codec.ts');
 const {engageLegacyCoordinationWriterFence}=await moduleAt(input.repo,'coordination/legacy_writer_fence.ts');
 const digest=value=>canonicalAuthoritySha256(value);
 const goal=input.goal_id, target='todo_lifecycle_rehearsal', acquisition='todo_acquire_rehearsal', handover='todo_claim_transfer_rehearsal';
@@ -67,20 +65,16 @@ const original={schema_version:'task_lease_v0',goal_id:goal,todo_id:target,owner
 initial.leases.push(original,{...original,todo_id:handover,idempotency_key:'handover-a',write_scopes:['handover/**']});
 initial.leases.sort((a,b)=>a.todo_id<b.todo_id?-1:a.todo_id>b.todo_id?1:0);
 const root=await mkdtemp(join(tmpdir(),'loopx-lease-rehearsal-'));
-const pool=new Pool({connectionString:process.env.LOOPX_TEST_POSTGRES_URL,max:4});
-const database={connect:async()=>{const c=await pool.connect();return {query:async(t,v)=>c.query(t,v),release:e=>c.release(e)};}};
-const tenant=`lease-rehearsal-${randomUUID()}`;
 const report={}; const observations={}; const finalHeads={};
 try {
-  await installPostgreSqlAuthorityStoreSchema(database,`postgresql:${'b'.repeat(32)}`);
-  for (const arm of ['legacy','file','sqlite','postgresql']) {
+  for (const arm of ['legacy','file','sqlite']) {
     const runtime=join(root,arm); await mkdir(runtime,{recursive:true});
     const source=join(runtime,'facts.json'), bytes=JSON.stringify({registered_agents:['agent-a','agent-b']});
     await writeFile(source,bytes);
     const authority={handoff_mode:'hard_lease',registered_agent_candidates:[['agent-a','agent-b']],
       todos:initial.todos, todo_projection_error:null,
       source_receipts:[{source_id:'registry',path:source,state:'file',sha256:createHash('sha256').update(bytes).digest('hex')}]};
-    let store=null, dependencies={};
+    let store=null; const dependencies={};
     const leaseDir=join(runtime,'goals',goal,'task-leases'); await mkdir(leaseDir,{recursive:true});
     // Every arm carries identical contradictory legacy files after promotion.
     for (const row of initial.leases) await writeFile(join(leaseDir,`${row.todo_id}.json`),JSON.stringify(row));
@@ -89,16 +83,6 @@ try {
     if (arm==='sqlite') {
       assert.equal((await selectLocalSqliteAuthority(runtime,goal,true)).ok,true);
       store=new SqliteAuthorityStore(join(runtime,'authority/sqlite-v0'),goal);
-    }
-    if (arm==='postgresql') {
-      store=new PostgreSqlAuthorityStore(database,{tenant_id:tenant,goal_id:goal});
-      const identity=await store.storeIdentity(); assert.equal(identity.status,'available');
-      await mkdir(join(runtime,'authority'),{recursive:true});
-      await writeFile(join(runtime,'authority',`provider-${createHash('sha256').update(goal).digest('hex')}.json`),JSON.stringify({
-        schema_version:'loopx_local_authority_provider_v0',provider:'postgresql',goal_id:goal,
-        tenant_id:tenant,store_identity:identity.store_identity}));
-      dependencies={authorityProvider:{openPostgresqlStore:selection=>{
-        assert.equal(selection.tenant_id,tenant);assert.equal(selection.goal_id,goal);return store;}}};
     }
     if (store) {
       assert.equal((await store.commitAuthority({expected_provider_revision:null,operation_id:'seed',events:[],receipts:[],next_projection:initial})).status,'applied');
@@ -185,16 +169,14 @@ try {
     }
     observations[arm]=[acquired,takeover,...results].map(r=>({lease:r.lease}));
   }
-  for (const arm of ['file','sqlite','postgresql']) assert.deepEqual(observations[arm],observations.legacy);
-  assert.deepEqual(finalHeads.file,finalHeads.sqlite); assert.deepEqual(finalHeads.file,finalHeads.postgresql);
+  for (const arm of ['file','sqlite']) assert.deepEqual(observations[arm],observations.legacy);
+  assert.deepEqual(finalHeads.file,finalHeads.sqlite);
   process.stdout.write(JSON.stringify({schema_version:'authority_lease_lifecycle_rehearsal_v0',
     initial_todos:initial.todos.length,initial_leases:initial.leases.length,fixture_sha256:digest(initial),
     observation_sha256:digest(observations.file),provider_head_sha256:digest(finalHeads.file),arms:report,
     intentional_delta:'canonical_receipt_recovery_and_current_acquire_proof;_explicit_create_CAS_retry_no_longer_mismatches;_explicit_atomic_claim_transfer',non_target_records_unchanged:true}));
 } finally {
-  for (const table of ['authority_receipts','authority_events','authority_commits','authority_heads'])
-    await pool.query(`DELETE FROM loopx_control_plane.${table} WHERE tenant_id=$1`,[tenant]);
-  await pool.end(); await rm(root,{recursive:true,force:true});
+  await rm(root,{recursive:true,force:true});
 }
 """
 
@@ -204,12 +186,9 @@ def main() -> int:
     parser.add_argument("--registry", type=Path, required=True)
     parser.add_argument("--goal-id", required=True)
     parser.add_argument("--baseline-repo", type=Path, required=True)
-    parser.add_argument("--execute-isolated-postgresql", action="store_true")
     parser.add_argument("--private-diagnostics", type=Path,
                         help="optional owner-only file for raw failure diagnostics; never publish it")
     args = parser.parse_args()
-    if not args.execute_isolated_postgresql or not os.environ.get("LOOPX_TEST_POSTGRES_URL"):
-        raise SystemExit("an explicitly isolated PostgreSQL server is required")
     baseline = args.baseline_repo.resolve()
     def git(*command):
         return subprocess.check_output(["git", "-C", str(baseline), *command], text=True).strip()

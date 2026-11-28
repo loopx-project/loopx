@@ -1,7 +1,5 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import {Pool} from "pg";
-import {PostgreSqlAuthorityStore, installPostgreSqlAuthorityStoreSchema} from "../../loopx/control_plane/coordination/postgresql_authority_store.ts";
 import type {AuthorityStore} from "../../loopx/control_plane/coordination/authority_store.ts";
 import {mkdtemp, rm} from "node:fs/promises";
 import {tmpdir} from "node:os";
@@ -33,20 +31,12 @@ function basis(view: JsonObject): JsonObject {
   const intent = view.intent as JsonObject;
   return {base_goal_revision: intent.goal_revision, base_intent_digest: intent.intent_digest, base_work_digest: view.work_digest};
 }
-for (const provider of ["file", "sqlite", "postgresql"] as const) {
+for (const provider of ["file", "sqlite"] as const) {
   for (const winner of ["commit", "abort_request", "correction"] as const) {
-    test(`${provider}: one request terminal wins ${winner}, including concurrent retry and lost linkage`,
-      {skip: provider === "postgresql" && !process.env.LOOPX_TEST_POSTGRES_URL}, async t => {
+    test(`${provider}: one request terminal wins ${winner}, including concurrent retry and lost linkage`, async t => {
       const directory = await mkdtemp(join(tmpdir(), "request-amendment-owner-"));
       t.after(() => rm(directory, {recursive: true, force: true}));
-      let store: AuthorityStore;
-      if (provider === "postgresql") {
-        const pool = new Pool({connectionString: process.env.LOOPX_TEST_POSTGRES_URL}); t.after(() => pool.end());
-        const database = {connect: async () => {const client = await pool.connect(); return {
-          query: (sql: string, values?: readonly unknown[]) => client.query(sql, values ? [...values] : undefined), release: () => client.release()};}};
-        await installPostgreSqlAuthorityStoreSchema(database, "postgresql:" + "b".repeat(32));
-        store = new PostgreSqlAuthorityStore(database, {tenant_id: directory, goal_id: goalRef.goal_id});
-      } else store = provider === "file" ? new FileAuthorityStore(directory, goalRef.goal_id) : new SqliteAuthorityStore(directory, goalRef.goal_id);
+      const store: AuthorityStore = provider === "file" ? new FileAuthorityStore(directory, goalRef.goal_id) : new SqliteAuthorityStore(directory, goalRef.goal_id);
       await store.commitAuthority({expected_provider_revision: null, operation_id: "seed", events: [], receipts: [], next_projection: {
         goal_id: goalRef.goal_id, todos: [], leases: [], todo_read_model: coordinationTodoReadModel([], TODO_DOMAIN_READ_RECORD_SCHEMA)}});
       const initial = await store.loadAuthority(); if (initial.status !== "loaded") throw new Error("missing");
@@ -99,17 +89,9 @@ for (const provider of ["file", "sqlite", "postgresql"] as const) {
       assert.equal((receipt.receipts as unknown[]).length, 1);
     });
   }
-  test(`${provider}: governed commit publishes one work item and basis; response loss replays original receipt`, {skip: provider === "postgresql" && !process.env.LOOPX_TEST_POSTGRES_URL}, async t => {
+  test(`${provider}: governed commit publishes one work item and basis; response loss replays original receipt`, async t => {
     const directory = await mkdtemp(join(tmpdir(), "amendment-owner-"));t.after(() => rm(directory, {recursive: true, force: true}));
-    let store: AuthorityStore;
-    if (provider === "postgresql") {
-      const pool = new Pool({connectionString: process.env.LOOPX_TEST_POSTGRES_URL});t.after(() => pool.end());
-      const database = {connect: async () => {
-        const client = await pool.connect();return {query: (sql: string, values?: readonly unknown[]) => client.query(sql, values ? [...values] : undefined), release: () => client.release()};
-      }};
-      await installPostgreSqlAuthorityStoreSchema(database, "postgresql:" + "b".repeat(32));
-      store = new PostgreSqlAuthorityStore(database, {tenant_id: directory, goal_id: goalRef.goal_id});
-    } else store = provider === "file" ? new FileAuthorityStore(directory, goalRef.goal_id) : new SqliteAuthorityStore(directory, goalRef.goal_id);
+    const store: AuthorityStore = provider === "file" ? new FileAuthorityStore(directory, goalRef.goal_id) : new SqliteAuthorityStore(directory, goalRef.goal_id);
     const existing = [{schema_version: "todo_domain_record_v0", todo_id: "todo-running", role: "agent", status: "open", done: false,
       archive_state: "active", text: "Previously authorized work", task_class: "advancement_task"}];
     const seed = await store.commitAuthority({expected_provider_revision: null, operation_id: "seed", events: [], receipts: [], next_projection: {

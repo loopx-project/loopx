@@ -254,6 +254,25 @@ This is an installation layout. CLI handlers and host facilities inside
 provider distributions keep the existing `packages/<package-id>/` convention;
 the capability-package row does not require one capability per provider.
 
+The local [Workspace wheel](../../../packages/loopx-workspace/README.md) adds
+Chat, Dashboard and the existing endpoint manager to the same release of
+`loopx-core`. It carries the verified browser bundle and opens the registry and
+runtime used by Core. Launch is explicit. Core help and task execution leave
+Workspace unloaded, and the Workspace loads the assessment executor on a
+research analysis request. Package smoke exercises a checked Core task,
+readback after installing and restarting Workspace, and Core replay after
+removal on File and SQLite. The native App, IM and split public release still
+have their own R2/M3 acceptance.
+
+Workspace carries the native Steward session, monitor and report adapters
+and the managed Session calendar because they use its original conversation
+store. These adapters reuse the Core command parsers and execution owners.
+Standalone Core observes pending requests and results at Turn start
+through the shared Inbox owner. Peers can request, adopt and return work
+through that owner. Only returns to an original Workspace conversation use its
+session store. Inbox read routes and receipts retain their scoped identities
+when Workspace is added or removed.
+
 Authority does not move: the kernel remains the only writer of Goal/Todo/claim/
 lease/quota/effect state. A capability package may only register providers,
 capability contracts and CLI subcommands through `CapabilityRegistry`; it never
@@ -380,6 +399,17 @@ objective. Moving a file while retaining its shim does not reduce that count;
 combining unrelated responsibilities to meet it is not a successful refactor.
 Measure representative change locality and installation cost separately.
 
+Standalone Core holds the benchmark catalog and its referenced four-arm
+contract. The matching [Benchmark Toolkit wheel](../../../packages/loopx-capability-benchmark-toolkit/README.md)
+owns the existing execution modules and CLI adapters. The capability catalog
+reports availability from matching installed files, and ordinary discovery
+leaves execution unloaded. An explicit benchmark command or scoped Workspace
+analysis request uses the original toolkit. Installing or removing the wheel
+preserves the existing task and analysis records. The ordinary distribution
+continues to bundle the same implementation. This qualifies a D2 package
+boundary for the tested toolkit journey. Benchmark-family execution, public
+release and model-visible overhead have separate acceptance.
+
 ### State model and schema
 
 No canonical record changes. The only new durable artefact is the architecture
@@ -444,11 +474,54 @@ retained core capability (D2).
    recovery semantics from the unified controller/executor design. Required
    reads and source completeness remain binding.
 
+A Worker launched by a built-in Host receives task requirements, scoped
+authority, and the original read route. Todo-authoring CLI templates and the
+ordinary delivery mode's quota spend instructions stay with the outer executor
+in the complete captured contract, while standard Worker disposition conditions
+for owner-only blockers and one-segment execution are delivered through checked
+prompt guidance (custom rules and non-ordinary modes keep original rule text). Work, repair, and stop conditions remain
+available to the Worker. Unconfigured memory recall and empty pre-turn
+observations expose their current scoped status in this view. Their full
+receipts stay in the original capture, with observations, failures, required
+reads and unfamiliar data still delivered when present.
+
+Work context carries the selected task, scoped User Todos and their read
+provenance. For both registered Todo read formats, the field dictionary stays
+with the canonical Todo reader. Existing captures remain available under
+their original digests.
+
+An ordinary admitted task presents its work, scope and validation to the Worker.
+Matching ready lease preparations stay with launch and settlement. Unready,
+inconsistent and unfamiliar preparations remain visible.
+Operators read release readiness and completed-work maintenance through
+quota/status or the original capture. Task context omits these maintenance
+directions.
+
 Context reuse must be invalidated by relevant source/requirement revisions,
 session generation changes, compaction or lost acknowledgements. A smaller
 packet cannot be treated as proof the executor has the prior context. Recover
 through the owning contract when continuity is unknown. Capability instructions
 are supplied when applicable; authority is never inferred from prompt text.
+
+The Standard CLI composition has three source-built capability wheel
+candidates, `loopx-capability-agent-turn-recall`,
+`loopx-capability-pull-request-review`, and `loopx-capability-issue-fix`.
+Install them together with `loopx-core[standard]` or add each alongside the
+matching Core release. The extra pins these three packages to the Core version.
+Core and each add-on own
+disjoint files and keep existing capability IDs, configuration and runtime
+owners. Independent provider packages use the public capability boundary above.
+
+Discovery reads metadata on its own. The existing Goal/Agent opt-in loads
+recall when installed, and outcome ingest retains its own recovery path.
+The `pr-review` command uses its existing exact-head queue and checkpoint.
+An explicit Issue Fix selection in a Core environment loads the matching
+workflow and presents its existing candidate admission. Ordinary Core goal
+previews stay free of its command templates. Generic PR-wait observation and
+previously acknowledged review reconciliation remain in Core, with public PR
+lifecycle code loaded for the selected observation or reconciliation. Existing
+work and checkpoints survive add-on removal. The full Standard workspace and
+published split release still need qualification.
 
 Optional observers consume committed events or bounded projections. Their
 latency must not enter admission/settlement transactions unless the existing
@@ -497,6 +570,24 @@ effects are unresolved. Result acceptance, transport delivery and the user's
 readback must also retain their existing distinct evidence.
 
 ### Product and benchmark execution
+
+For standalone Core, `loopx-capability-research` takes **Explore** as its
+primary optional workflow (moving heavy Explore orchestration, multi-branch/frontier
+planning, harness/episode replay, source reconciliation, and the `explore` CLI
+surface out of Core) together with the standalone `deepresearch` evidence ledger
+and `external-evidence` commands. Core retains only Explore's canonical
+result-event contract, lightweight projection, machine/goal configuration
+adapters, and Goal permission and settlement validation (`loopx-core` keeps
+ordinary turns lazy and independent of `loopx-capability-research`). Installing
+the wheel grants no extra Goal write authority. Parent-admitted
+`external-evidence` projects sanitized public-safe references into enabled same-goal
+Explore nodes without automatic provider execution, and `deepresearch` citation
+reports expose a one-way, idempotent, read-only export (`explore import-citations`)
+so local paths, private sources, and report prose stay inside
+`.loopx/deepresearch/` while standalone `deepresearch` commands continue reading
+existing ledgers unchanged. The Core catalog binds `explore`, `deep-research`,
+and `external-evidence-research` to `loopx-capability-research` and reports
+readiness, missing-file/version diagnostics, and install hints passively.
 
 Follow the [long-horizon research program](long-horizon-harness-benchmark-research-program-v0.md):
 native/plain controls, passive observation, governed execution and ablations
@@ -591,6 +682,14 @@ lease. Rollback uses the same reconciliation and retains durable state.
 Any later irreversible data change needs a separate migration/export gate.
 
 Rollback of these structural/composition changes requires no data migration.
+For existing standalone `.loopx/deepresearch/` ledgers, active runs keep their
+existing read, continuation, close, archive, and rollback semantics in
+`loopx-capability-research`; open sessions can close in place or project
+sanitized citation references one-way into an enabled Goal's Explore graph
+without mutating `.loopx/deepresearch/`. Uninstalling
+`loopx-capability-research` preserves Goal Explore logs, Goal permissions, and
+standalone research ledgers so the environment can roll back to bare
+`loopx-core` cleanly or resume by reinstalling the matching wheel.
 Default changes need explicit owner decisions and release notes; this proposal
 changes no current default.
 

@@ -47,10 +47,16 @@ function lazyHandler<Module>(
   load: () => Promise<Module>,
   select: (module: Module) => EffectRuntimeHandler,
 ): EffectRuntimeHandler {
-  let handler: Promise<EffectRuntimeHandler> | undefined;
+  let resolved: EffectRuntimeHandler | undefined;
+  let loading: Promise<EffectRuntimeHandler> | undefined;
   return async (params) => {
-    handler ??= load().then(select);
-    return (await handler)(params);
+    if (resolved !== undefined) return resolved(params);
+    loading ??= load().then(select).then((fn) => {
+      resolved = fn;
+      loading = undefined;
+      return fn;
+    });
+    return (await loading)(params);
   };
 }
 
@@ -281,6 +287,7 @@ export function createEffectRuntimeHandlers(
     ["turn_journal.observed_capabilities", lazyHandler(() => import("./turn_driver/turn_journal_query.ts"), ({readTurnJournalCapabilities}) => readTurnJournalCapabilities)],
     ["todo.priority.plan", lazyHandler(() => import("./todos/priority.ts"), ({evaluateTodoPriority}) => evaluateTodoPriority)],
     ["todo.read", lazyHandler(() => import("./todos/read_transport.ts"), ({readTodoRuntime}) => readTodoRuntime)],
+    ["todo.authority_head.verify", lazyHandler(() => import("./todos/read_transaction.ts"), ({verifyCanonicalTodoAuthorityWitness}) => verifyCanonicalTodoAuthorityWitness)],
     ["capabilities.periodic_report.progress.select", lazyHandler(() => import("./capabilities/periodic_report_progress.ts"), ({selectPeriodicReportProgress}) => selectPeriodicReportProgress)],
     ["capabilities.periodic_report.approval_retry.select", lazyHandler(() => import("./capabilities/periodic_report_progress.ts"), ({selectPeriodicReportApprovalRetry}) => selectPeriodicReportApprovalRetry)],
     ["todo.succession.project", lazyHandler(() => import("./todos/succession.ts"), ({projectTodoSuccession}) => projectTodoSuccession)],
@@ -299,6 +306,7 @@ export function createEffectRuntimeHandlers(
     ["benchmark.terminal-followthrough.prepare", lazyHandler(() => import("./capabilities/benchmark_terminal_followthrough.ts"), ({prepareBenchmarkTerminalFollowthrough}) => prepareBenchmarkTerminalFollowthrough)],
     ["benchmark.cli_source_activation", lazyHandler(() => import("./capabilities/benchmark_cli_source_activation.ts"), ({qualifyCliSourceActivation}) => qualifyCliSourceActivation)],
     ["agent.preferences", lazyHandler(() => import("./capabilities/agent_preferences.ts"), ({agentPreferences}) => agentPreferences)],
+    ["decision_context.hook", lazyHandler(() => import("./capabilities/decision_context_hook.ts"), ({decisionContextHook}) => decisionContextHook)],
     ["todo.archive.capture_dependencies", lazyHandler(() => Promise.all([import("./todos/archive_capture.ts"), import("./coordination/source_transfer.ts")]), ([{captureArchivedTodoDependencies}, {withCoordinationSourceTransfer}]) => withCoordinationSourceTransfer("todo.archive.capture_dependencies", captureArchivedTodoDependencies))],
     ["agent.supervisor.plan_append", lazyHandler(() => import("./agents/supervisor_event_append.ts"), ({planSupervisorEventAppend}) => planSupervisorEventAppend)],
     ["coordination.source.project", lazyHandler(() => Promise.all([import("./coordination/source_projection.ts"), import("./coordination/source_transfer.ts")]), ([{projectCoordinationSource}, {withCoordinationSourceTransfer}]) => withCoordinationSourceTransfer("coordination.source.project", projectCoordinationSource))],
@@ -319,7 +327,13 @@ export function createEffectRuntimeHandlers(
     ["goal.fallback_disposition.project", lazyHandler(() => import("./goals/goal_frontier/fallback_disposition.ts"), ({projectFallbackDisposition}) => projectFallbackDisposition)],
     ["todo.pr_wait_observation.plan", lazyHandler(() => import("./todos/pr_wait_observation.ts"), ({planPrWaitObservationsFromSource}) => planPrWaitObservationsFromSource)],
     ["todo.resume_planning.project", lazyHandler(() => import("./todos/resume_planning.ts"), ({projectTodoResumePlanning}) => projectTodoResumePlanning)],
-    ["todo.quota_planning.project", lazyHandler(() => import("./todos/quota_selection.ts"), ({projectTodoQuotaPlanning}) => projectTodoQuotaPlanning)],
+    ["todo.quota_planning.project", lazyHandler(
+      () => Promise.all([import("./todos/quota_selection.ts"), import("./todos/read_transaction.ts")]),
+      ([{projectTodoQuotaPlanning}, {projectCanonicalQuotaBatch}]) =>
+        (params) => params?.schema_version === "todo_quota_planning_batch_v0"
+          ? projectCanonicalQuotaBatch(params)
+          : projectTodoQuotaPlanning(params),
+    )],
     ["todo.frontier_revision.project", lazyHandler(() => import("./todos/frontier_revision.ts"), ({projectAdvancementFrontier}) => projectAdvancementFrontier)],
     ["goal.long_todo_chain.evaluate", lazyHandler(() => import("./todos/frontier_revision.ts"), ({evaluateLongTodoChain}) => evaluateLongTodoChain)],
     ["scheduler.state_transition.evaluate", lazyHandler(() => import("./scheduler/state_transition_rules.ts"), ({evaluateSchedulerStateTransition}) => evaluateSchedulerStateTransition)],
@@ -392,6 +406,7 @@ export function createEffectRuntimeHandlers(
     ["quota.settlement.read", lazyHandler(() => import("./quota/settlement_readback.ts"), ({readQuotaSettlement}) => readQuotaSettlement)],
     ["quota.execution_loss_closeout.commit", lazyHandler(() => import("./quota/execution_loss_closeout.ts"), ({commitExecutionLossCloseout}) => commitExecutionLossCloseout)],
     ["quota.heartbeat_receipt.select", lazyHandler(() => import("./quota/heartbeat_receipt_identity.ts"), ({projectHeartbeatReceiptSelection}) => projectHeartbeatReceiptSelection)],
+    ["quota.semantic_replan_guard.validate", lazyHandler(() => import("./quota/semantic_replan_guard.ts"), ({validateSemanticReplanGuard}) => validateSemanticReplanGuard)],
     [
       "quota.prior_host_turn_closeout.preflight",
       lazyHandler(() => import("./quota/unsettled_host_turn_recovery.ts"), ({preflightPriorHostTurnCloseout}) => preflightPriorHostTurnCloseout),
@@ -417,20 +432,6 @@ export function createEffectRuntimeHandlers(
     ["coordination.runtime_shadow.rollback", lazyHandler(() => Promise.all([import("./coordination/runtime_shadow.ts"), import("./coordination/source_transfer.ts")]), ([{rollbackCoordinationRuntimeShadow}, {withCoordinationSourceTransfer}]) => withCoordinationSourceTransfer("coordination.runtime_shadow.rollback", rollbackCoordinationRuntimeShadow))],
     ["coordination.local_authority.promote", lazyHandler(() => import("./coordination/local_authority_runtime.ts"), ({promoteLocalCoordinationAuthority}) => promoteLocalCoordinationAuthority)],
     ["coordination.authority_archive.manage", lazyHandler(() => import("./coordination/local_authority_archive.ts"), ({manageLocalAuthorityArchive}) => manageLocalAuthorityArchive)],
-    ["coordination.postgresql.setup", lazyHandler(() => import("./coordination/postgresql_authority_seed.ts"), ({setupPostgreSqlAuthoritySchemaAndRole}) => params => setupPostgreSqlAuthoritySchemaAndRole({
-      databaseUrl: requiredString(params.databaseUrl, "databaseUrl"),
-      storeIdentity: optionalString(params.storeIdentity, "storeIdentity") ?? undefined,
-      runtimeRole: optionalString(params.runtimeRole, "runtimeRole") ?? undefined,
-    }))],
-    ["coordination.postgresql.seed", lazyHandler(() => import("./coordination/postgresql_authority_seed.ts"), ({exportLocalToPgGenesisSeed}) => params => exportLocalToPgGenesisSeed({
-      runtimeRoot: requiredString(params.runtimeRoot, "runtimeRoot"),
-      goalId: requiredString(params.goalId, "goalId"),
-      tenantId: optionalString(params.tenantId, "tenantId") ?? undefined,
-      outputPath: optionalString(params.outputPath, "outputPath") ?? undefined,
-      databaseUrl: optionalString(params.databaseUrl, "databaseUrl") ?? undefined,
-      storeIdentity: optionalString(params.storeIdentity, "storeIdentity") ?? undefined,
-      execute: requireBoolean(params.execute, "execute"),
-    }))],
     ["configuration.backup", lazyHandler(() => import("./configuration_backup.ts"), ({configurationBackupOperation}) => configurationBackupOperation)],
     ["runtime.checkpoint_artifacts", lazyHandler(() => import("./runtime/checkpoint_artifacts.ts"), ({checkpointArtifacts}) => checkpointArtifacts)],
     ["state.recovery.archive.verify", lazyHandler(() => import("./state_recovery.ts"), ({verifyStateRecoveryArchive}) => verifyStateRecoveryArchive)],

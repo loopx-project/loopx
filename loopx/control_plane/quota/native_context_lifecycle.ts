@@ -47,8 +47,16 @@ export function updateNativeContextLifecycle(request: JsonObject): JsonObject {
   const invalidate = () => {
     // Reset is idempotent while already invalid. Pre/PostCompact and the
     // subsequent SessionStart(compact) therefore do not rotate three epochs.
-    if (!state.context_epoch || state.candidate || state.pending || fileEpochCurrent)
+    if (!state.context_epoch || state.candidate || state.pending || fileEpochCurrent) {
+      const previousEpoch = state.context_epoch;
       state.context_epoch = requireNonEmptyString(request.new_epoch, "new native context epoch");
+      if (state.context_epoch !== previousEpoch) {
+        delete state.epoch_prefetch;
+        delete state.quiet_turn;
+        delete state.semantic_unit_anchors;
+        delete state.semantic_unit_folds;
+      }
+    }
     delete state.candidate;
     delete state.pending;
     delete state.active_call; // retire legacy diagnostic-call binding
@@ -56,6 +64,20 @@ export function updateNativeContextLifecycle(request: JsonObject): JsonObject {
     delete state.confirmed_read_sections;
     delete state.section_reads;
     delete state.selected_resume;
+  };
+  const applySemanticUnitEventState = () => {
+    const rawAnchor = jsonObject(request.semantic_unit_anchor);
+    if (rawAnchor && typeof rawAnchor.todo_id === "string" && rawAnchor.todo_id
+        && rawAnchor.context_epoch === state.context_epoch) {
+      const anchors = jsonObject(state.semantic_unit_anchors) ?? {};
+      state.semantic_unit_anchors = {...anchors, [rawAnchor.todo_id]: rawAnchor};
+    }
+    const rawFold = jsonObject(request.semantic_unit_fold);
+    if (rawFold && typeof rawFold.todo_id === "string" && rawFold.todo_id
+        && rawFold.context_epoch === state.context_epoch) {
+      const folds = jsonObject(state.semantic_unit_folds) ?? {};
+      state.semantic_unit_folds = {...folds, [rawFold.todo_id]: rawFold};
+    }
   };
   if (name === "SessionStart") {
     // The provider may qualify the native-selected replay source against the
@@ -104,10 +126,12 @@ export function updateNativeContextLifecycle(request: JsonObject): JsonObject {
       return state;
     }
     invalidate();
+    applySemanticUnitEventState();
     return state;
   }
   if (name === "PreCompact" || name === "PostCompact") {
     invalidate();
+    applySemanticUnitEventState();
     return state;
   }
   if (name === "Interrupt") {
@@ -115,6 +139,9 @@ export function updateNativeContextLifecycle(request: JsonObject): JsonObject {
     return state;
   }
   if (name !== "PostToolUse") return state;
+  if (same && (request.semantic_unit_anchor !== undefined || request.semantic_unit_fold !== undefined)) {
+    applySemanticUnitEventState();
+  }
   const recovery = jsonObject(state.recovery), pending = jsonObject(state.pending);
   if (!recovery || !jsonObject(recovery.target)) return state;
   const pages = Array.isArray(request.pages) ? request.pages : [];

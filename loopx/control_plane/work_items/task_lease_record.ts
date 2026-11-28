@@ -2,6 +2,7 @@ import type {JsonObject} from "../effect_program.ts";
 import {parseIsoTimestamp} from "../runtime_timestamp.ts";
 
 export const TASK_LEASE_SCHEMA_VERSION = "task_lease_v0";
+export const DEFAULT_TASK_LEASE_TTL_SECONDS = 3 * 60 * 60;
 
 export interface LeaseRecord extends JsonObject {
   schema_version?: unknown;

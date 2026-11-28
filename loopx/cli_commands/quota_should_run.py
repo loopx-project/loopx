@@ -4,11 +4,12 @@ from __future__ import annotations
 
 import argparse
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from ..capabilities.progress_review.context import external_progress_review_context
+from ..control_plane.effect_runtime import EffectRuntimeRejected
 from ..control_plane.quota.effective_action import EffectiveAction
 from ..control_plane.quota.effect_program import SettlementIdentity
 from ..control_plane.quota.error_codes import HeartbeatReceiptIdentityConflictError
@@ -18,6 +19,12 @@ from ..control_plane.quota.heartbeat_receipt import (
     find_heartbeat_receipt,
     heartbeat_receipt_request_subject,
     heartbeat_receipt_view,
+    repair_orphaned_identity_upgrade_heartbeat_receipt,
+    repair_orphaned_identity_upgrade_heartbeat_receipts_for_agent,
+)
+from ..control_plane.quota.semantic_replan_guard_merge import (
+    has_orphaned_identity_upgrade_replan_guard,
+    is_malformed_settlement_state_error,
 )
 from ..control_plane.turn_driver.codex_context import context_delivery_for_arguments
 from ..file_lock import LockAcquireTimeoutError
@@ -64,85 +71,101 @@ def dispatch_quota_turn_start_hooks(
     preview = bool(getattr(args, "dry_run", False))
     if preview and not args.agent_id:
         return None, False
+    from ..control_plane.capability_hooks import (
+        capability_hook_request_scope,
+        dispatch_turn_start_hooks,
+        load_scoped_registry,
+    )
+
     dispatch: dict[str, object] = {}
-    if not preview and lark_turn_start_hook_dispatcher is not None:
-        dispatch = lark_turn_start_hook_dispatcher(
-            registry_path=registry_path,
-            runtime_root_arg=runtime_root_arg,
-            goal_id=args.goal_id,
-            agent_id=args.agent_id,
-        )
-    if args.agent_id:
-        from ..capabilities.manager_context import turn_start_hook
-        from ..capabilities.semantic_preference.agent_preferences import (
-            extend_turn_start_dispatch as extend_preferences,
-        )
-        from ..control_plane.capability_hooks import dispatch_turn_start_hooks
-        from ..history import load_registry
-        from ..paths import resolve_runtime_root
-
-        root = resolve_runtime_root(
-            load_registry(registry_path),
-            runtime_root_arg,
-            registry_path=registry_path,
-        )
-        if not preview:
-            from ..capabilities.turn_start import (
-                extend_turn_start_dispatch as extend_registered_capabilities,
-            )
-
-            dispatch = extend_registered_capabilities(
-                dispatch,
+    with capability_hook_request_scope():
+        if not preview and lark_turn_start_hook_dispatcher is not None:
+            dispatch = lark_turn_start_hook_dispatcher(
                 registry_path=registry_path,
-                runtime_root=root,
-                goal_id=args.goal_id,
-                agent_id=args.agent_id,
-                available=args.available_capabilities,
-            )
-        # A preview still needs the current local Inbox and preferences. These
-        # hooks observe existing context without recording reads or delivery.
-        model_read = not getattr(args, "scheduler_observation", False)
-        context_dispatch = dispatch_turn_start_hooks(
-            (
-                turn_start_hook(
-                    root,
-                    registry_path,
-                    args.goal_id,
-                    args.agent_id,
-                    model_read=model_read,
-                ),
-            )
-        )
-        context_dispatch = extend_preferences(
-            context_dispatch,
-            runtime_root=root,
-            registry_path=registry_path,
-            goal_id=args.goal_id,
-            agent_id=args.agent_id,
-        )
-        dispatch = dict(dispatch)
-        for key in ("results", "required_reads", "failures", "contexts"):
-            if key == "contexts" and not context_dispatch.get(key):
-                continue
-            dispatch[key] = list(dispatch.get(key) or []) + list(
-                context_dispatch.get(key) or []
-            )
-        for key in ("registered_count", "invoked_count"):
-            dispatch[key] = int(dispatch.get(key) or 0) + int(
-                context_dispatch.get(key) or 0
-            )
-        if not preview:
-            from ..capabilities.periodic_report.cadence_runtime import (
-                extend_cadence_turn_start_dispatch,
-            )
-
-            dispatch = extend_cadence_turn_start_dispatch(
-                dispatch,
-                registry_path=registry_path,
-                runtime_root=root,
+                runtime_root_arg=runtime_root_arg,
                 goal_id=args.goal_id,
                 agent_id=args.agent_id,
             )
+        if args.agent_id:
+            from ..capabilities.decision_context.turn_start_hook import (
+                extend_turn_start_dispatch as extend_decision_context,
+            )
+            from ..control_plane.collaboration.inbox_turn_start import turn_start_hook
+            from ..capabilities.semantic_preference.agent_preferences import (
+                extend_turn_start_dispatch as extend_preferences,
+            )
+            from ..history import load_registry
+            from ..paths import resolve_runtime_root
+
+            root = resolve_runtime_root(
+                load_scoped_registry(registry_path, loader=load_registry),
+                runtime_root_arg,
+                registry_path=registry_path,
+            )
+            if not preview:
+                from ..capabilities.turn_start import (
+                    extend_turn_start_dispatch as extend_registered_capabilities,
+                )
+
+                dispatch = extend_registered_capabilities(
+                    dispatch,
+                    registry_path=registry_path,
+                    runtime_root=root,
+                    goal_id=args.goal_id,
+                    agent_id=args.agent_id,
+                    available=args.available_capabilities,
+                )
+            # A preview still needs the current local Inbox and preferences. These
+            # hooks observe existing context without recording reads or delivery.
+            model_read = not getattr(args, "scheduler_observation", False)
+            context_dispatch = dispatch_turn_start_hooks(
+                (
+                    turn_start_hook(
+                        root,
+                        registry_path,
+                        args.goal_id,
+                        args.agent_id,
+                        model_read=model_read,
+                    ),
+                )
+            )
+            context_dispatch = extend_preferences(
+                context_dispatch,
+                runtime_root=root,
+                registry_path=registry_path,
+                goal_id=args.goal_id,
+                agent_id=args.agent_id,
+            )
+            context_dispatch = extend_decision_context(
+                context_dispatch,
+                runtime_root=root,
+                registry_path=registry_path,
+                goal_id=args.goal_id,
+                agent_id=args.agent_id,
+            )
+            dispatch = dict(dispatch)
+            for key in ("results", "required_reads", "failures", "contexts"):
+                if key == "contexts" and not context_dispatch.get(key):
+                    continue
+                dispatch[key] = list(dispatch.get(key) or []) + list(
+                    context_dispatch.get(key) or []
+                )
+            for key in ("registered_count", "invoked_count"):
+                dispatch[key] = int(dispatch.get(key) or 0) + int(
+                    context_dispatch.get(key) or 0
+                )
+            if not preview:
+                from ..capabilities.periodic_report.cadence_runtime import (
+                    extend_cadence_turn_start_dispatch,
+                )
+
+                dispatch = extend_cadence_turn_start_dispatch(
+                    dispatch,
+                    registry_path=registry_path,
+                    runtime_root=root,
+                    goal_id=args.goal_id,
+                    agent_id=args.agent_id,
+                )
     local_private_state_mutated = bool(dispatch.get("uncertain_local_effects")) or any(
         isinstance(result, Mapping)
         and result.get("local_private_state_mutated") is not False
@@ -430,6 +453,28 @@ def execute_quota_should_run(
     execution.heartbeat_receipt_existing = action_selection.receipt
     execution.heartbeat_receipt_existing_status = "replayed"
     execution.heartbeat_receipt_existing_appended = False
+    mutable_should_run = (
+        not getattr(args, "dry_run", False)
+        and not getattr(args, "scheduler_observation", False)
+    )
+    if (
+        mutable_should_run
+        and heartbeat_turn_id
+        and has_orphaned_identity_upgrade_replan_guard(execution.heartbeat_receipt_existing)
+    ):
+        repaired_receipt, repaired = repair_orphaned_identity_upgrade_heartbeat_receipt(
+            runtime_root,
+            goal_id=args.goal_id,
+            agent_id=args.agent_id,
+            turn_instance_id=heartbeat_turn_id,
+            goal_ref=goal_ref,
+        )
+        if repaired and repaired_receipt is not None:
+            action_selection = replace(action_selection, receipt=repaired_receipt)
+            execution.action_selection = action_selection
+            execution.heartbeat_receipt_existing = repaired_receipt
+            execution.heartbeat_receipt_existing_status = "upgraded"
+            execution.heartbeat_receipt_existing_appended = True
 
     context_projector = turn_context_projector(
         registry_path=registry_path,
@@ -440,39 +485,56 @@ def execute_quota_should_run(
     )
     complete_context = not getattr(args, "scheduler_observation", False)
     outcome_navigation = complete_context and context_delivery_for_arguments(args)["progressive_enabled"]
-    payload = export("build_live_quota_should_run_decision")(
-        status_payload,
-        goal_id=args.goal_id,
-        agent_id=args.agent_id,
-        inline_goal_source=complete_context,
-        available_capabilities=args.available_capabilities,
-        include_scheduler_detail="scheduler" in detail_sections,
-        include_agent_todo_detail="agent-todos" in detail_sections,
-        codex_app_current_rrule=args.app_automation_current_rrule,
-        registry_path=registry_path,
-        runtime_root=runtime_root,
-        host_observation_resolver=export("resolve_codex_app_automation_rrule"),
-        scheduler_execution_context=scheduler_context,
-        operator_inbox_urgency_projector=operator_inbox_urgency_projector,
-        bounded_research_frontier_projector=export(
+    decision_builder = export("build_live_quota_should_run_decision")
+    decision_kwargs = {
+        "goal_id": args.goal_id,
+        "agent_id": args.agent_id,
+        "inline_goal_source": complete_context,
+        "available_capabilities": args.available_capabilities,
+        "include_scheduler_detail": "scheduler" in detail_sections,
+        "include_agent_todo_detail": "agent-todos" in detail_sections,
+        "codex_app_current_rrule": args.app_automation_current_rrule,
+        "registry_path": registry_path,
+        "runtime_root": runtime_root,
+        "host_observation_resolver": export("resolve_codex_app_automation_rrule"),
+        "scheduler_execution_context": scheduler_context,
+        "operator_inbox_urgency_projector": operator_inbox_urgency_projector,
+        "bounded_research_frontier_projector": export(
             "project_live_explore_composition_frontier"
         ),
-        progress_review_context_reader=external_progress_review_context,
-        receipt_bound_todo_id=action_selection.receipt_bound_todo_id,
-        requested_action_todo_id=action_selection.requested_todo_id_for_decision,
-        receipt_bound_replan_obligation_id=(
+        "progress_review_context_reader": external_progress_review_context,
+        "receipt_bound_todo_id": action_selection.receipt_bound_todo_id,
+        "requested_action_todo_id": action_selection.requested_todo_id_for_decision,
+        "receipt_bound_replan_obligation_id": (
             action_selection.receipt_bound_replan_obligation_id
         ),
-        retained_action_selection_todo_id=(
+        "retained_action_selection_todo_id": (
             action_selection.retained_todo_id_for_decision
         ),
-        turn_instance_id=heartbeat_turn_id,
-        interaction_projection_hooks=interaction_projection_hooks,
-        turn_start_hook_dispatch=turn_start_hook_dispatch,
-        turn_context_projector=context_projector,
-        context_navigation=outcome_navigation,
-        goal_ref=goal_ref,
-    )
+        "turn_instance_id": heartbeat_turn_id,
+        "interaction_projection_hooks": interaction_projection_hooks,
+        "turn_start_hook_dispatch": turn_start_hook_dispatch,
+        "turn_context_projector": context_projector,
+        "context_navigation": outcome_navigation,
+        "goal_ref": goal_ref,
+    }
+    try:
+        payload = decision_builder(status_payload, **decision_kwargs)
+    except (ValueError, EffectRuntimeRejected) as exc:
+        if (
+            mutable_should_run
+            and is_malformed_settlement_state_error(exc)
+            and repair_orphaned_identity_upgrade_heartbeat_receipts_for_agent(
+                runtime_root,
+                goal_id=args.goal_id,
+                agent_id=args.agent_id,
+                goal_ref=goal_ref,
+            )
+            > 0
+        ):
+            payload = decision_builder(status_payload, **decision_kwargs)
+        else:
+            raise
     execution.payload = payload
     action_selection_preflight = export("reconcile_requested_quota_action_selection")(
         payload,
@@ -520,6 +582,7 @@ def execute_quota_should_run(
             execution.heartbeat_receipt_existing
             and not execution.upgrade_recovery_wait
         ):
+            prior_repaired = execution.heartbeat_receipt_existing_appended
             (
                 execution.heartbeat_receipt_existing,
                 execution.heartbeat_receipt_existing_status,
@@ -536,6 +599,9 @@ def execute_quota_should_run(
                 scheduler_execution_context=context.scheduler_context,
                 status_payload=status_payload,
             )
+            if prior_repaired and not execution.heartbeat_receipt_existing_appended:
+                execution.heartbeat_receipt_existing_status = "upgraded"
+                execution.heartbeat_receipt_existing_appended = True
         else:
             (
                 execution.payload,

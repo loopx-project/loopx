@@ -305,6 +305,12 @@ def _encode_document(
     ).encode("utf-8")
 
 
+def _invalidate_registry_snapshot(path: Path) -> None:
+    from ..hook_runtime.request_scope import invalidate_hook_registry_snapshot
+
+    invalidate_hook_registry_snapshot(path)
+
+
 def _atomic_write_bytes(path: Path, payload: bytes, *, mode: int | None) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     descriptor, temporary = tempfile.mkstemp(
@@ -321,6 +327,7 @@ def _atomic_write_bytes(path: Path, payload: bytes, *, mode: int | None) -> None
         if mode is not None:
             os.chmod(temporary_path, mode)
         os.replace(temporary_path, path)
+        _invalidate_registry_snapshot(path)
     finally:
         temporary_path.unlink(missing_ok=True)
 
@@ -455,9 +462,11 @@ class ProjectRegistryTransaction:
         if self._finished:
             raise RuntimeError("project registry transaction is already finished")
         if not self._path.exists():
+            _invalidate_registry_snapshot(self._path)
             self._finished = True
             return False
         self._path.unlink()
+        _invalidate_registry_snapshot(self._path)
         if self._path.exists():
             raise ProjectRegistryMutationError(
                 "project registry removal readback failed"
@@ -478,6 +487,7 @@ class ProjectRegistryTransaction:
                 )
         else:
             self._path.unlink(missing_ok=True)
+            _invalidate_registry_snapshot(self._path)
             if self._path.exists():
                 raise ProjectRegistryRestoreError(
                     "new project registry could not be removed during restore"

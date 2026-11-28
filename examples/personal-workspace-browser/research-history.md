@@ -459,6 +459,7 @@ desktop/narrow layouts without dispatching an Agent:
 ```sh
 node --experimental-strip-types --test apps/presentation/dashboard/src/features/personal-workspace/research-record-search.test.mjs apps/presentation/dashboard/src/features/personal-workspace/research-record-versions.test.mjs
 node --experimental-strip-types --test apps/presentation/dashboard/src/features/personal-workspace/research-record-export.test.mjs apps/presentation/dashboard/src/features/personal-workspace/research-record-report.test.mjs
+node --experimental-strip-types --test apps/presentation/dashboard/src/features/personal-workspace/research-comparison-export.test.mjs
 LOOPX_PERSONAL_WORKSPACE_PACKAGED=1 LOOPX_PERSONAL_WORKSPACE_SCENARIO=research-record-search node examples/personal-workspace-browser-smoke.mjs
 LOOPX_DASHBOARD_COVERAGE=1 LOOPX_PERSONAL_WORKSPACE_SCENARIO=research-record-search node examples/personal-workspace-browser-smoke.mjs
 ```

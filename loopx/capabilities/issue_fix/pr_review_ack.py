@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -11,11 +11,12 @@ from ...control_plane.todos.contract import (
     normalize_todo_bound_agent,
 )
 from ...control_plane.todos.todo_semantics import todo_item_task_class
-from ...history import load_registry
+from ...control_plane.projects.registry_codec import load_registry
 from ...paths import resolve_runtime_root
 from ...rollout_event_log import (
     append_rollout_event_once,
     build_rollout_event,
+    iter_reverse_rollout_events_by_kind,
     load_rollout_events,
     rollout_event_log_path,
 )
@@ -66,15 +67,27 @@ def _require_exact_review_todo(
     todo_id: str,
     agent_id: str,
     project: Path | None,
+    prefetched_todos: Sequence[Mapping[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    todo_payload = list_goal_todos(
-        registry_path=registry_path,
-        goal_id=goal_id,
-        role="user",
-        todo_id=todo_id,
-        project=project,
-    )
-    todo = todo_payload.get("todo")
+    todo: dict[str, Any] | None = None
+    if prefetched_todos is not None:
+        for candidate in prefetched_todos:
+            if (
+                candidate.get("todo_id") == todo_id
+                and candidate.get("role") in (None, "user")
+            ):
+                todo = dict(candidate)
+                break
+    if todo is None:
+        todo_payload = list_goal_todos(
+            registry_path=registry_path,
+            goal_id=goal_id,
+            role="user",
+            todo_id=todo_id,
+            project=project,
+        )
+        raw_todo = todo_payload.get("todo")
+        todo = raw_todo if isinstance(raw_todo, dict) else None
     if not isinstance(todo, dict):
         raise ValueError(f"user todo {todo_id!r} was not found")
     if todo_item_task_class(todo) != TODO_TASK_CLASS_USER_ACTION:
@@ -115,6 +128,7 @@ def resolve_issue_fix_pr_review_context(
     project: Path | None,
     url: str,
     ack_receipt: Mapping[str, Any] | None = None,
+    prefetched_todos: Sequence[Mapping[str, Any]] | None = None,
 ) -> dict[str, Any]:
     try:
         todo = _require_exact_review_todo(
@@ -123,6 +137,7 @@ def resolve_issue_fix_pr_review_context(
             todo_id=todo_id,
             agent_id=agent_id,
             project=project,
+            prefetched_todos=prefetched_todos,
         )
     except ValueError as exc:
         return {
@@ -364,12 +379,11 @@ def load_issue_fix_pr_review_ack_receipts(
 ) -> list[dict[str, Any]]:
     receipts: list[dict[str, Any]] = []
     seen_todos: set[str] = set()
-    events = load_rollout_events(rollout_event_log_path(runtime_root, goal_id))
-    for event in reversed(events):
-        if (
-            event.get("event_kind") != PR_REVIEW_ACK_EVENT_KIND
-            or str(event.get("agent_id") or "") != agent_id
-        ):
+    for event in iter_reverse_rollout_events_by_kind(
+        rollout_event_log_path(runtime_root, goal_id),
+        event_kind=PR_REVIEW_ACK_EVENT_KIND,
+    ):
+        if str(event.get("agent_id") or "") != agent_id:
             continue
         todo_id = str(event.get("todo_id") or "")
         if not todo_id or todo_id in seen_todos:

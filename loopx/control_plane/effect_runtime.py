@@ -14,6 +14,7 @@ import sys
 import tempfile
 import time
 import uuid
+from collections import deque
 from collections.abc import Iterable, Iterator, Mapping
 from contextlib import ExitStack, closing, contextmanager, suppress
 from contextvars import ContextVar
@@ -89,6 +90,30 @@ RUNTIME_LOCATOR_PERMISSION_RETRIES = 3
 RUNTIME_RETRY_SETTLE_SECONDS = 0.25
 RUNTIME_LOCATOR_RECOVERY_TIMEOUT_SECONDS = 1.0
 _RUNTIME_PID_MAX = 0xFFFFFFFF
+_STALE_RUNTIME_DESCRIPTOR_GRACE_SECONDS = 60.0
+_STALE_RUNTIME_DESCRIPTOR_MAX_INSPECT = 64
+_STALE_RUNTIME_DESCRIPTOR_MAX_REMOVALS = 32
+_STALE_RUNTIME_DESCRIPTOR_MAX_BYTES = 16 * 1024
+_STALE_RUNTIME_DESCRIPTOR_MAX_SCAN_STEPS = 512
+_STALE_CLEANUP_SWEEP_LIMIT = 4
+_STALE_CLEANUP_SWEEP_IDLE_SECONDS = 300.0
+_STALE_CLEANUP_SEEN_LOCK_LIMIT = 65536
+
+
+@dataclass
+class _StaleCleanupSweep:
+    scandir_cm: Any
+    iterator: Iterator[os.DirEntry[str]] | None
+    pending_candidates: deque[os.DirEntry[str]]
+    seen_lock_names: set[str]
+    dir_identity: tuple[int, int]
+    scandir_fn: object
+    last_used_monotonic: float
+
+
+_stale_cleanup_sweeps: dict[str, _StaleCleanupSweep] = {}
+_stale_cleanup_sweeps_lock = Lock()
+_stale_cleanup_generation = 0
 DEFAULT_REQUEST_TIMEOUT_SECONDS = 10.0
 # Canonical writers may wait 30 seconds for the per-Goal maintenance lock and
 # another 5 seconds for the provider lock. Keep the client connected through
@@ -288,11 +313,7 @@ def _source_digest_location(
 
 
 def _private_directory(path: Path) -> bool:
-    try:
-        metadata = os.lstat(path)
-    except OSError:
-        return False
-    return stat.S_ISDIR(metadata.st_mode) and metadata.st_uid == os.getuid() and not metadata.st_mode & 0o077
+    return _private_directory_identity(path) is not None
 
 
 def _read_source_digest(path: Path, key: str) -> str | None:
@@ -744,6 +765,7 @@ def restart_effect_runtime(*, timeout: float = 5.0, wait_for_exit: bool = False)
     exit-time cache write, whereas filesystem cleanup requires observed exit.
     """
     if _uses_stdio_runtime():
+        close_stale_cleanup_sweeps()
         return _restart_stdio_runtime(timeout)
     fingerprint = _runtime_fingerprint()
     info_path = _runtime_info_path(fingerprint)
@@ -766,6 +788,7 @@ def _stop_effect_runtime(
     """
     identity = runtime_identity_from_info(info)
     if info is None:
+        close_stale_cleanup_sweeps(runtime_dir=info_path.parent)
         return _restart_result("not_running", stopped=False, identity=identity, info_path=info_path)
     pid, serving_token = info.get("pid"), info.get("token")
     # A runtime that is already closing must still be reported as pending
@@ -793,6 +816,7 @@ def _stop_effect_runtime(
             stopped = True
             break
         time.sleep(0.05)
+    close_stale_cleanup_sweeps(runtime_dir=info_path.parent)
     return _restart_result(
         "stopped" if stopped else "shutdown_pending", stopped=stopped, identity=identity, info_path=info_path,
     )
@@ -971,7 +995,376 @@ def _runtime_info_for_request(path: Path, *, fingerprint: str) -> _RuntimeInfo |
     info = _read_info(path, fingerprint=fingerprint)
     if info is not None:
         return info
+    _cleanup_stale_runtime_descriptors(path.parent, exclude_path=path)
     return _recover_runtime_info(path, _inspect_info(path, fingerprint=fingerprint), fingerprint=fingerprint)
+
+
+def _runtime_descriptor_lock_file_active(
+    lock_path: Path,
+    *,
+    now: float,
+    grace_seconds: float,
+    json_owner: bool,
+) -> bool:
+    try:
+        st = lock_path.lstat()
+    except FileNotFoundError:
+        return False
+    except OSError:
+        return True
+    if not stat.S_ISREG(st.st_mode):
+        return True
+    if hasattr(os, "getuid") and st.st_uid != os.getuid():
+        return True
+    if now - st.st_mtime < grace_seconds:
+        return True
+    if not json_owner:
+        holder_pid = _start_lock_holder_pid(lock_path)
+        return holder_pid is None or _recorded_pid_alive(holder_pid) is not False
+    try:
+        raw = lock_path.read_text(encoding="utf-8")
+        payload = json.loads(raw)
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return True
+    if not isinstance(payload, dict):
+        return True
+    return _recorded_pid_alive(payload.get("pid")) is not False
+
+
+def _runtime_descriptor_has_active_lock(
+    info_path: Path,
+    *,
+    seen_lock_names: set[str],
+    now: float,
+    grace_seconds: float,
+) -> bool:
+    name = info_path.name
+    ts_lock_prefix = f"{name}.ts-effect.lock"
+    if any(
+        entry_name.startswith(ts_lock_prefix + ".claim.")
+        or entry_name.startswith(ts_lock_prefix + ".released.")
+        or entry_name.startswith(ts_lock_prefix + ".stale.")
+        for entry_name in seen_lock_names
+    ):
+        return True
+    for suffix_path in (
+        info_path.with_name(f"{ts_lock_prefix}.claim"),
+        info_path.with_name(f"{ts_lock_prefix}.released"),
+    ):
+        try:
+            suffix_path.lstat()
+            return True
+        except FileNotFoundError:
+            pass
+        except OSError:
+            return True
+    ts_lock = info_path.with_name(ts_lock_prefix)
+    if _runtime_descriptor_lock_file_active(
+        ts_lock, now=now, grace_seconds=grace_seconds, json_owner=True,
+    ):
+        return True
+    suffix = name[len("runtime-"):-len(".json")]
+    start_lock = info_path.with_name(f"start-{suffix}.lock")
+    return _runtime_descriptor_lock_file_active(
+        start_lock, now=now, grace_seconds=grace_seconds, json_owner=False,
+    )
+
+
+def _cleanup_cursor_key(runtime_dir: Path) -> str:
+    try:
+        return os.path.normcase(str(runtime_dir.resolve()))
+    except OSError:
+        return os.path.normcase(str(runtime_dir))
+
+
+def _private_directory_identity(path: Path) -> tuple[int, int] | None:
+    try:
+        metadata = os.lstat(path)
+    except OSError:
+        return None
+    if (
+        not stat.S_ISDIR(metadata.st_mode)
+        or (hasattr(os, "getuid") and metadata.st_uid != os.getuid())
+        or bool(metadata.st_mode & 0o077)
+    ):
+        return None
+    return metadata.st_dev, metadata.st_ino
+
+
+def _close_sweep_iterator(sweep: _StaleCleanupSweep) -> None:
+    sweep.iterator = None
+    cm = sweep.scandir_cm
+    sweep.scandir_cm = None
+    if cm is None:
+        return
+    exit_fn = getattr(cm, "__exit__", None)
+    if callable(exit_fn):
+        with suppress(OSError, RuntimeError):
+            exit_fn(None, None, None)
+
+
+def _close_sweeps(sweeps: Iterable[_StaleCleanupSweep]) -> None:
+    for sweep in sweeps:
+        _close_sweep_iterator(sweep)
+
+
+def close_stale_cleanup_sweeps(*, runtime_dir: Path | None = None) -> None:
+    """Close cached directory sweeps held for bounded stale-descriptor cleanup."""
+    global _stale_cleanup_generation
+    to_close: list[_StaleCleanupSweep] = []
+    with _stale_cleanup_sweeps_lock:
+        _stale_cleanup_generation += 1
+        if runtime_dir is None:
+            to_close.extend(_stale_cleanup_sweeps.values())
+            _stale_cleanup_sweeps.clear()
+        else:
+            sweep = _stale_cleanup_sweeps.pop(_cleanup_cursor_key(runtime_dir), None)
+            if sweep is not None:
+                to_close.append(sweep)
+    _close_sweeps(to_close)
+
+
+def _reset_stale_cleanup_sweeps_after_fork() -> None:
+    global _stale_cleanup_sweeps_lock, _stale_cleanup_generation
+    _stale_cleanup_sweeps_lock = Lock()
+    _stale_cleanup_generation += 1
+    sweeps = list(_stale_cleanup_sweeps.values())
+    _stale_cleanup_sweeps.clear()
+    _close_sweeps(sweeps)
+
+
+if hasattr(os, "register_at_fork"):
+    os.register_at_fork(after_in_child=_reset_stale_cleanup_sweeps_after_fork)
+atexit.register(close_stale_cleanup_sweeps)
+
+
+# Only evict *other* dirs when idle-closing: closing and reopening os.scandir
+# for the active key resets the cursor and stalls >=300s low-frequency misses.
+def _checkout_stale_cleanup_sweep(
+    key: str, *, dir_identity: tuple[int, int], scandir_fn: object,
+) -> tuple[_StaleCleanupSweep | None, int]:
+    now_mono = time.monotonic()
+    to_close: list[_StaleCleanupSweep] = []
+    with _stale_cleanup_sweeps_lock:
+        expired_keys = [
+            k for k, s in _stale_cleanup_sweeps.items()
+            if k != key and now_mono - s.last_used_monotonic >= _STALE_CLEANUP_SWEEP_IDLE_SECONDS
+        ]
+        for expired_key in expired_keys:
+            to_close.append(_stale_cleanup_sweeps.pop(expired_key))
+        sweep = _stale_cleanup_sweeps.pop(key, None)
+        if sweep is not None and (sweep.dir_identity != dir_identity or sweep.scandir_fn is not scandir_fn):
+            to_close.append(sweep)
+            sweep = None
+        generation = _stale_cleanup_generation
+    _close_sweeps(to_close)
+    return sweep, generation
+
+
+def _open_stale_cleanup_sweep(
+    runtime_dir: Path, *, dir_identity: tuple[int, int], scandir_fn: object,
+) -> _StaleCleanupSweep | None:
+    try:
+        cm = os.scandir(runtime_dir)
+    except OSError:
+        return None
+    try:
+        entries = cm.__enter__()
+        iterator = iter(entries)
+    except OSError:
+        with suppress(OSError, RuntimeError):
+            cm.__exit__(None, None, None)
+        return None
+    return _StaleCleanupSweep(
+        scandir_cm=cm, iterator=iterator, pending_candidates=deque(), seen_lock_names=set(),
+        dir_identity=dir_identity, scandir_fn=scandir_fn, last_used_monotonic=time.monotonic(),
+    )
+
+
+def _advance_stale_cleanup_sweep(
+    sweep: _StaleCleanupSweep, *, exclude_name: str | None, max_inspect: int, max_scan_steps: int,
+) -> bool:
+    window_steps = 0
+    while (
+        sweep.iterator is not None
+        and len(sweep.pending_candidates) < max_inspect
+        and window_steps < max_scan_steps
+    ):
+        try:
+            entry = next(sweep.iterator)
+        except StopIteration:
+            _close_sweep_iterator(sweep)
+            break
+        except OSError:
+            _close_sweep_iterator(sweep)
+            return False
+        window_steps += 1
+        entry_name = entry.name
+        if (
+            len(sweep.seen_lock_names) < _STALE_CLEANUP_SEEN_LOCK_LIMIT
+            and any(
+                m in entry_name
+                for m in (".ts-effect.lock.claim.", ".ts-effect.lock.released.", ".ts-effect.lock.stale.")
+            )
+        ):
+            sweep.seen_lock_names.add(entry_name)
+        if entry_name.startswith("runtime-") and entry_name.endswith(".json") and entry_name != exclude_name:
+            sweep.pending_candidates.append(entry)
+    return True
+
+
+def _checkin_stale_cleanup_sweep(key: str, sweep: _StaleCleanupSweep, *, generation: int) -> None:
+    if sweep.iterator is None and not sweep.pending_candidates:
+        _close_sweep_iterator(sweep)
+        return
+    to_close: list[_StaleCleanupSweep] = []
+    with _stale_cleanup_sweeps_lock:
+        if generation != _stale_cleanup_generation or key in _stale_cleanup_sweeps:
+            to_close.append(sweep)
+        else:
+            while len(_stale_cleanup_sweeps) >= _STALE_CLEANUP_SWEEP_LIMIT:
+                to_close.append(_stale_cleanup_sweeps.pop(next(iter(_stale_cleanup_sweeps))))
+            sweep.last_used_monotonic = time.monotonic()
+            _stale_cleanup_sweeps[key] = sweep
+    _close_sweeps(to_close)
+
+
+def _try_unlink_stale_descriptor(
+    runtime_dir: Path,
+    entry: os.DirEntry[str],
+    *,
+    seen_lock_names: set[str],
+    now: float,
+    grace_seconds: float,
+    no_follow: int,
+) -> bool:
+    candidate = runtime_dir / entry.name
+    try:
+        st = entry.stat(follow_symlinks=False)
+    except OSError:
+        return False
+    if not stat.S_ISREG(st.st_mode):
+        return False
+    if hasattr(os, "getuid") and st.st_uid != os.getuid():
+        return False
+    if now - st.st_mtime < grace_seconds:
+        return False
+    if _runtime_descriptor_has_active_lock(
+        candidate, seen_lock_names=seen_lock_names, now=now, grace_seconds=grace_seconds,
+    ):
+        return False
+    try:
+        fd = os.open(candidate, os.O_RDONLY | no_follow)
+    except OSError:
+        return False
+    try:
+        with os.fdopen(fd, "rb") as file:
+            fst = os.fstat(file.fileno())
+            if (
+                not stat.S_ISREG(fst.st_mode)
+                or fst.st_dev != st.st_dev
+                or fst.st_ino != st.st_ino
+                or (hasattr(os, "getuid") and fst.st_uid != os.getuid())
+            ):
+                return False
+            raw = file.read(_STALE_RUNTIME_DESCRIPTOR_MAX_BYTES + 1)
+    except OSError:
+        return False
+    if len(raw) > _STALE_RUNTIME_DESCRIPTOR_MAX_BYTES:
+        return False
+    try:
+        payload = json.loads(raw)
+    except (UnicodeError, ValueError, RecursionError):
+        return False
+    if (
+        not isinstance(payload, dict)
+        or payload.get("schema_version") != EFFECT_RUNTIME_INFO_SCHEMA_VERSION
+        or not isinstance(payload.get("fingerprint"), str)
+    ):
+        return False
+    if _recorded_pid_alive(payload.get("pid")) is not False:
+        return False
+    try:
+        current_st = candidate.lstat()
+    except OSError:
+        return False
+    if (
+        current_st.st_dev != st.st_dev
+        or current_st.st_ino != st.st_ino
+        or current_st.st_mtime_ns != st.st_mtime_ns
+    ):
+        return False
+    if _runtime_descriptor_has_active_lock(
+        candidate, seen_lock_names=seen_lock_names, now=time.time(), grace_seconds=grace_seconds,
+    ):
+        return False
+    try:
+        candidate.unlink(missing_ok=True)
+    except OSError:
+        return False
+    return True
+
+
+def _cleanup_stale_runtime_descriptors(
+    runtime_dir: Path,
+    *,
+    exclude_path: Path | None = None,
+    grace_seconds: float = _STALE_RUNTIME_DESCRIPTOR_GRACE_SECONDS,
+    max_inspect: int = _STALE_RUNTIME_DESCRIPTOR_MAX_INSPECT,
+    max_removals: int = _STALE_RUNTIME_DESCRIPTOR_MAX_REMOVALS,
+) -> int:
+    """Opportunistically unlink bounded dead-PID runtime-*.json descriptors."""
+    if max_inspect <= 0 or max_removals <= 0:
+        return 0
+    dir_identity = _private_directory_identity(runtime_dir)
+    if dir_identity is None:
+        return 0
+    exclude_name: str | None = None
+    if exclude_path is not None:
+        with suppress(OSError):
+            if exclude_path.parent.resolve() == runtime_dir.resolve():
+                exclude_name = exclude_path.name
+    key = _cleanup_cursor_key(runtime_dir)
+    scandir_fn = os.scandir
+    sweep, generation = _checkout_stale_cleanup_sweep(
+        key, dir_identity=dir_identity, scandir_fn=scandir_fn,
+    )
+    if sweep is None:
+        sweep = _open_stale_cleanup_sweep(
+            runtime_dir, dir_identity=dir_identity, scandir_fn=scandir_fn,
+        )
+        if sweep is None:
+            return 0
+    healthy = _advance_stale_cleanup_sweep(
+        sweep,
+        exclude_name=exclude_name,
+        max_inspect=max_inspect,
+        max_scan_steps=max(max_inspect * 8, _STALE_RUNTIME_DESCRIPTOR_MAX_SCAN_STEPS),
+    )
+    now = time.time()
+    inspected = 0
+    removed = 0
+    no_follow = getattr(os, "O_NOFOLLOW", 0)
+    while sweep.pending_candidates and inspected < max_inspect and removed < max_removals:
+        entry = sweep.pending_candidates.popleft()
+        if exclude_name is not None and entry.name == exclude_name:
+            continue
+        inspected += 1
+        if _try_unlink_stale_descriptor(
+            runtime_dir,
+            entry,
+            seen_lock_names=sweep.seen_lock_names,
+            now=now,
+            grace_seconds=grace_seconds,
+            no_follow=no_follow,
+        ):
+            removed += 1
+    if healthy:
+        _checkin_stale_cleanup_sweep(key, sweep, generation=generation)
+    else:
+        sweep.pending_candidates.clear()
+        _close_sweep_iterator(sweep)
+    return removed
 
 
 def _inspect_runtime_locator(
@@ -980,6 +1373,8 @@ def _inspect_runtime_locator(
     recover: bool,
 ) -> tuple[_RuntimeLocatorState, bool | None, _RuntimeLocatorDiagnostic | None, _RuntimeInfo | None]:
     path = _runtime_info_path(fingerprint)
+    if recover:
+        _cleanup_stale_runtime_descriptors(path.parent, exclude_path=path)
     info = _read_info(path, fingerprint=fingerprint)
     if info is not None:
         return "valid", True, None, info
@@ -1246,6 +1641,7 @@ def _start_runtime(*, fingerprint: str, info_path: Path) -> _RuntimeInfo:
                     deadline=time.monotonic() + budget, check_running_diagnostic=check_running,
                 )
                 if info is not None:
+                    _cleanup_stale_runtime_descriptors(runtime_dir, exclude_path=info_path)
                     return info
             failure = _published_startup_failure(startup_stderr)
             if failure is not None:

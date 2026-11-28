@@ -47,6 +47,7 @@ def _event(
     todo_id: str | None = None,
     replan: bool = False,
     stage_transition: str | None = None,
+    stage_identity: str = "stage-closed-vision-frontier",
     stage_acceptance: str = "validated",
     outcome_checkpoint_satisfied: bool = True,
     durable_writeback_required: bool = True,
@@ -59,7 +60,7 @@ def _event(
                 "stage_completion_schema": (
                     "periodic_report_stage_completion_receipt_v0"
                 ),
-                "stage_identity": "stage-closed-vision-frontier",
+                "stage_identity": stage_identity,
                 "closed_vision_revision": "2026-08-21T08:59:00Z",
                 "frontier_identity": "frontier-next-analysis",
                 "stage_transition": stage_transition,
@@ -322,6 +323,64 @@ def test_runtime_producer_cli_reads_durable_rollout_log(tmp_path, capsys) -> Non
     assert payload["producer_receipt"]["status"] == "promoted"
 
 
+@pytest.mark.parametrize("reverse_log_order", [False, True])
+def test_runtime_producer_cli_uses_chronological_stage_boundary(
+    tmp_path, capsys, reverse_log_order: bool
+) -> None:
+    request = _request()
+    request_path = tmp_path / "request.json"
+    request_path.write_text(json.dumps(request), encoding="utf-8")
+    event_log = tmp_path / "rollout-event-log.jsonl"
+    first_stage = _event(
+        "refresh_state",
+        event_at="2026-08-21T09:00:00Z",
+        stage_transition="successor_frontier_settled",
+    )
+    same_instant = _event(
+        "todo_complete", event_at="2026-08-21T10:00:00+01:00", todo_id="on-boundary"
+    )
+    events = [
+        first_stage,
+        same_instant,
+        _event("todo_complete", event_at="2026-08-21T09:00:00.25Z", todo_id="later"),
+        _event(
+            "refresh_state",
+            event_at="2026-08-21T09:00:00.5Z",
+            stage_transition="goal_terminal",
+            stage_identity="later-stage",
+        ),
+    ]
+    for event in reversed(events) if reverse_log_order else events:
+        append_rollout_event(event_log, event)
+
+    assert main(
+        [
+            "--format",
+            "json",
+            "periodic-report",
+            "evaluate-runtime-trigger",
+            "--request-json",
+            str(request_path),
+            "--rollout-events-jsonl",
+            str(event_log),
+        ]
+    ) == 0
+    decision = json.loads(capsys.readouterr().out)
+    receipt = decision["producer_receipt"]
+    assert receipt["contributing_event_ids"] == [first_stage["event_id"]]
+    assert receipt["stage_completion_count"] == 2
+    assert receipt["todo_completed_count"] == 2
+    at_boundary = build_periodic_report_runtime_trigger_decision(
+        request, rollout_events=[first_stage, same_instant]
+    )
+    without_completions = build_periodic_report_runtime_trigger_decision(
+        request, rollout_events=[first_stage]
+    )
+    # The decision ID includes the milestone's delivered_count.
+    assert decision["decision_id"] == at_boundary["decision_id"]
+    assert decision["decision_id"] != without_completions["decision_id"]
+
+
 def test_runtime_producer_cli_streams_large_history_before_bounded_window(
     tmp_path, capsys
 ) -> None:
@@ -359,6 +418,50 @@ def test_runtime_producer_cli_streams_large_history_before_bounded_window(
     payload = json.loads(capsys.readouterr().out)
     assert payload["eligible"] is True
     assert payload["producer_receipt"]["todo_completed_count"] == 0
+
+
+@pytest.mark.parametrize(
+    ("start_at", "allowed"),
+    [
+        pytest.param("2026-08-17T12:00:00.000001Z", True, id="one-microsecond-inside"),
+        pytest.param("2026-08-17T20:00:00+08:00", True, id="exactly-at-limit"),
+        pytest.param("2026-08-17T11:59:59.999999Z", False, id="one-microsecond-over"),
+        pytest.param("2026-08-17T11:59:59Z", False, id="one-second-over"),
+    ],
+)
+def test_runtime_producer_cli_enforces_exact_window_limit(
+    tmp_path, capsys, start_at: str, allowed: bool
+) -> None:
+    request = _request()
+    segment = request["segment"]
+    assert isinstance(segment, dict)
+    segment["start_at"] = start_at
+    request_path = tmp_path / "request.json"
+    request_path.write_text(json.dumps(request), encoding="utf-8")
+    event_log = tmp_path / "rollout-event-log.jsonl"
+    append_rollout_event(
+        event_log,
+        _event(
+            "refresh_state",
+            event_at="2026-08-21T09:00:00Z",
+            stage_transition="goal_terminal",
+        ),
+    )
+
+    code = main([
+        "--format", "json", "periodic-report", "evaluate-runtime-trigger",
+        "--request-json", str(request_path), "--rollout-events-jsonl", str(event_log),
+    ])
+    decision = json.loads(capsys.readouterr().out)
+    assert code == (0 if allowed else 1)
+    assert decision["ok"] is allowed
+    if allowed:
+        assert decision["eligible"] is True
+        assert decision["producer_receipt"]["status"] == "promoted"
+    else:
+        assert decision["error"] == (
+            "segment window exceeds trigger_policy.aggregation.window_seconds"
+        )
 
 
 def test_runtime_producer_rejects_relevant_window_over_capacity() -> None:

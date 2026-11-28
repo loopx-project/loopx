@@ -1,11 +1,12 @@
 import assert from "node:assert/strict";
-import {mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync} from "node:fs";
+import {linkSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync} from "node:fs";
 import {tmpdir} from "node:os";
 import {join, resolve} from "node:path";
 import test from "node:test";
 
 import {inspectCheckpointReplay} from "../../loopx/control_plane/goals/checkpoint_commit.ts";
 import type {JsonObject} from "../../loopx/control_plane/effect_program.ts";
+import {EffectRuntimeRequestError} from "../../loopx/control_plane/effect_runtime_errors.ts";
 
 const goalId = "goal-checkpoint-relocate";
 const jsonName = "2026-08-25T12-00-00Z-checkpoint.json";
@@ -88,6 +89,39 @@ function rejectPrior(runsDir: string, root: string, jsonPath: string, markdownPa
   assert.throws(() => inspect(root, prior), invalidPath);
 }
 
+function linkOrSkip(t: test.TestContext, existing: string, path: string): void {
+  try {
+    linkSync(existing, path);
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === "EPERM" || code === "ENOTSUP" || code === "EOPNOTSUPP" || code === "EXDEV" || code === "ENOSYS") {
+      t.skip(`hard links are unavailable on this platform (${code})`);
+    }
+    throw error;
+  }
+}
+
+function assertExclusiveHardLink(path: string, outside: string): void {
+  const linked = lstatSync(path);
+  const target = lstatSync(outside);
+  assert.equal(linked.isSymbolicLink(), false);
+  assert.equal(linked.isFile(), true);
+  assert.equal(linked.nlink, 2);
+  assert.equal(linked.ino, target.ino);
+}
+
+function assertHardLinkRejected(root: string, prior: JsonObject, message: RegExp): void {
+  assert.throws(
+    () => inspect(root, prior),
+    (error: unknown) => {
+      assert.ok(error instanceof EffectRuntimeRequestError);
+      assert.equal(error.code, "checkpoint_commit_unknown");
+      assert.match(error.message, message);
+      return true;
+    },
+  );
+}
+
 test("inspectCheckpointReplay reads checkpoint artifacts copied into a relocated runtime", (t) => {
   const fixture = relocatedFixture(t);
   const result = inspect(fixture.relocatedRoot, fixture.prior);
@@ -167,4 +201,73 @@ test("inspectCheckpointReplay rejects a relocated symlink or non-file artifact",
   rmSync(directory.relocatedJson);
   mkdirSync(directory.relocatedJson);
   rejectPrior(directory.relocatedRuns, directory.relocatedRoot, directory.originalJson, directory.originalMarkdown);
+});
+
+test("inspectCheckpointReplay rejects a relocated hard link with matching checkpoint bytes", (t) => {
+  const linkedJson = relocatedFixture(t);
+  const jsonBytes = readFileSync(linkedJson.originalJson);
+  const markdownBytes = readFileSync(linkedJson.relocatedMarkdown);
+  const indexBytes = readFileSync(join(linkedJson.relocatedRuns, "index.jsonl"));
+  rmSync(linkedJson.relocatedJson);
+  linkOrSkip(t, linkedJson.originalJson, linkedJson.relocatedJson);
+  assertExclusiveHardLink(linkedJson.relocatedJson, linkedJson.originalJson);
+  assertHardLinkRejected(linkedJson.relocatedRoot, linkedJson.prior, invalidPath);
+  assert.deepEqual(readFileSync(linkedJson.originalJson), jsonBytes);
+  assert.deepEqual(readFileSync(linkedJson.relocatedMarkdown), markdownBytes);
+  assert.deepEqual(readFileSync(join(linkedJson.relocatedRuns, "index.jsonl")), indexBytes);
+  assertExclusiveHardLink(linkedJson.relocatedJson, linkedJson.originalJson);
+
+  const linkedMarkdown = relocatedFixture(t);
+  const sharedMarkdown = readFileSync(linkedMarkdown.originalMarkdown);
+  const markdownIndex = readFileSync(join(linkedMarkdown.relocatedRuns, "index.jsonl"));
+  rmSync(linkedMarkdown.relocatedMarkdown);
+  linkOrSkip(t, linkedMarkdown.originalMarkdown, linkedMarkdown.relocatedMarkdown);
+  assertExclusiveHardLink(linkedMarkdown.relocatedMarkdown, linkedMarkdown.originalMarkdown);
+  assertHardLinkRejected(linkedMarkdown.relocatedRoot, linkedMarkdown.prior, invalidPath);
+  assert.deepEqual(readFileSync(linkedMarkdown.originalMarkdown), sharedMarkdown);
+  assert.deepEqual(readFileSync(join(linkedMarkdown.relocatedRuns, "index.jsonl")), markdownIndex);
+  assertExclusiveHardLink(linkedMarkdown.relocatedMarkdown, linkedMarkdown.originalMarkdown);
+});
+
+test("inspectCheckpointReplay rejects an in-directory hard link to an outside file", (t) => {
+  const root = runtime(t);
+  const runsDir = join(root, "goals", goalId, "runs");
+  mkdirSync(runsDir, {recursive: true});
+  const jsonPath = join(runsDir, jsonName);
+  const markdownPath = join(runsDir, markdownName);
+  writeJson(jsonPath, "current-runtime");
+  writeFileSync(markdownPath, "current markdown\n");
+  const outsideJson = join(root, "outside-checkpoint.json");
+  const outsideMarkdown = join(root, "outside-checkpoint.md");
+  writeJson(outsideJson, "current-runtime");
+  writeFileSync(outsideMarkdown, "current markdown\n");
+  const outsideJsonBytes = readFileSync(outsideJson);
+  const outsideMarkdownBytes = readFileSync(outsideMarkdown);
+
+  rmSync(jsonPath);
+  linkOrSkip(t, outsideJson, jsonPath);
+  const jsonPrior = indexPrior(jsonPath, markdownPath);
+  writeIndex(runsDir, jsonPrior);
+  const indexBytes = readFileSync(join(runsDir, "index.jsonl"));
+  assertExclusiveHardLink(jsonPath, outsideJson);
+  assertHardLinkRejected(root, jsonPrior, /checkpoint artifact is not a regular file/);
+  assert.deepEqual(readFileSync(outsideJson), outsideJsonBytes);
+  assert.deepEqual(readFileSync(markdownPath), Buffer.from("current markdown\n"));
+  assert.deepEqual(readFileSync(join(runsDir, "index.jsonl")), indexBytes);
+  assertExclusiveHardLink(jsonPath, outsideJson);
+
+  rmSync(jsonPath);
+  writeJson(jsonPath, "current-runtime");
+  const restoredJson = readFileSync(jsonPath);
+  rmSync(markdownPath);
+  linkOrSkip(t, outsideMarkdown, markdownPath);
+  const markdownPrior = indexPrior(jsonPath, markdownPath);
+  writeIndex(runsDir, markdownPrior);
+  const markdownIndex = readFileSync(join(runsDir, "index.jsonl"));
+  assertExclusiveHardLink(markdownPath, outsideMarkdown);
+  assertHardLinkRejected(root, markdownPrior, /checkpoint artifact is not a regular file/);
+  assert.deepEqual(readFileSync(outsideMarkdown), outsideMarkdownBytes);
+  assert.deepEqual(readFileSync(jsonPath), restoredJson);
+  assert.deepEqual(readFileSync(join(runsDir, "index.jsonl")), markdownIndex);
+  assertExclusiveHardLink(markdownPath, outsideMarkdown);
 });

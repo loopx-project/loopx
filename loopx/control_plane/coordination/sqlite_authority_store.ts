@@ -3,14 +3,14 @@ import { createHash, randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, statSync } from "node:fs";
 import {sqliteAuthorityRuntime} from "./sqlite_runtime.ts";
 import { dirname, join } from "node:path";
-import type { DatabaseSync } from "node:sqlite";
+import type { DatabaseSync, StatementSync } from "node:sqlite";
 
 import type { JsonObject } from "../effect_program.ts";
 import type { AuthorityStore, AuthorityStoreCommit, AuthorityStoreCommitResult, AuthorityStoreCommittedTransaction,
   AuthorityStoreIdentityResult, AuthorityStoreLoadResult, AuthorityStoreSnapshotResult, AuthorityStoreReadFailure, AuthorityStoreHead,
   AuthorityStoreReceiptResult, AuthorityStoreReceiptBatchResult, AuthorityStoreScanResult } from "./authority_store.ts";
 import { AuthorityStoreProtocolError, canonicalAuthorityBytes, canonicalAuthorityObject,
-  canonicalAuthorityObjectList, canonicalAuthoritySha256,
+  canonicalAuthorityObjectList, canonicalAuthoritySha256, hashCanonicalCommitEnvelope,
   normalizeAuthorityStoreCommit, requireAuthorityStoreId } from "./authority_store_codec.ts";
 import {
   AUTHORITY_STATE_CHECKPOINT_INTERVAL,
@@ -18,7 +18,6 @@ import {
   authorityStateCheckpointCursor,
   authorityStateDelta,
   authorityStateDeltaReconstructs,
-  authorityStateDigest,
   authorityStateReplayBudget,
   decodeAuthorityStateDelta,
   isAuthorityStateCheckpoint,
@@ -187,8 +186,10 @@ export class SqliteAuthorityStore implements AuthorityStore {
       db.exec("PRAGMA busy_timeout = 5000; PRAGMA foreign_keys = ON;");
       if (write) {
         db.exec("PRAGMA journal_mode = WAL; PRAGMA synchronous = FULL;");
-        db.exec("BEGIN IMMEDIATE");
+        let inTransaction = false;
         try {
+          db.exec("BEGIN IMMEDIATE");
+          inTransaction = true;
           const version = Number(db.prepare("PRAGMA user_version").get()?.user_version ?? 0);
           if (version === 0) {
             // Never adopt an unrelated/unversioned database.
@@ -201,7 +202,13 @@ export class SqliteAuthorityStore implements AuthorityStore {
           }
           this.identity(db);
           db.exec("COMMIT");
-        } catch (error) { db.exec("ROLLBACK"); throw error; }
+          inTransaction = false;
+        } catch (error) {
+          if (inTransaction) {
+            try { db.exec("ROLLBACK"); } catch { /* close abandons active transaction */ }
+          }
+          throw error;
+        }
       } else this.identity(db);
       return db;
     } catch (error) { db.close(); throw error; }
@@ -283,11 +290,16 @@ export class SqliteAuthorityStore implements AuthorityStore {
     return {cursor: row.cursor, digest: row.state_digest, replay};
   }
 
-  private loadCheckpoint(db: DatabaseSync, cursor: bigint): SqliteReplayCursor {
+  private loadCheckpoint(
+    db: DatabaseSync,
+    cursor: bigint,
+    checkpointStmt?: StatementSync,
+  ): SqliteReplayCursor {
     const expected = authorityStateCheckpointCursor(cursor);
-    const row = db.prepare(
+    const stmt = checkpointStmt ?? db.prepare(
       "SELECT cursor, projection, projection_digest FROM checkpoints WHERE cursor = ?",
-    ).get(expected.toString());
+    );
+    const row = stmt.get(expected.toString());
     if (!row) protocol("SQLite authority checkpoint is missing for its window");
     const replay = new AuthorityStateReplay(this.parseJson(row.projection, "SQLite checkpoint projection"));
     const digest = this.requireDigest(row.projection_digest, "SQLite checkpoint digest");
@@ -361,8 +373,11 @@ export class SqliteAuthorityStore implements AuthorityStore {
     }
     const projection = canonicalAuthorityObject(this.parseJson(row.projection, "SQLite head projection"),
       "SQLite head projection");
+    const projectionJson = JSON.stringify(projection);
     const digest = this.requireDigest(row.state_digest, "SQLite head state digest");
-    if (authorityStateDigest(projection) !== digest) protocol("SQLite authority head digest mismatch");
+    if (createHash("sha256").update(projectionJson, "utf8").digest("hex") !== digest) {
+      protocol("SQLite authority head digest mismatch");
+    }
     const retained = db.prepare(`SELECT ${COMMIT_COLUMNS} FROM commits WHERE cursor = ?`).get(row.sequence);
     if (!retained) protocol("SQLite authority head has no retained transaction");
     const newest = this.decodeCommitRow(retained as unknown as Record<string, unknown>);
@@ -374,8 +389,10 @@ export class SqliteAuthorityStore implements AuthorityStore {
       : newest.parent_state_digest !== parent?.state_digest) {
       protocol("SQLite authority head parent lineage is invalid");
     }
-    if (newest.commit_digest !==
-      commitDigest(identity, cursor, newest.operation_id, projection, newest.events, newest.receipts)) {
+    if (newest.commit_digest !== hashCanonicalCommitEnvelope(
+      commitFields(identity, cursor, newest.operation_id, newest.events, newest.receipts),
+      (hash) => { hash.update(projectionJson, "utf8"); },
+    )) {
       protocol("SQLite committed row digest mismatch");
     }
     // Recovery of this head resumes from one retained checkpoint, so its
@@ -514,26 +531,31 @@ export class SqliteAuthorityStore implements AuthorityStore {
       const next = (cursor ?? 0n) + 1n;
       if (next > MAX_SEQUENCE) protocol("SQLite authority sequence exhausted");
       const before = current?.state ?? {cursor: 0n, projection: {}, digest: ""};
-      const nextState = canonicalAuthorityObject(normalized.next_projection, "SQLite authority state");
+      const nextState = normalized.next_projection;
       const delta = authorityStateDelta(before.projection, nextState);
       // The encoder is proved before it is persisted: replaying the stored
       // delta must reproduce the committed projection byte for byte.
       if (!authorityStateDeltaReconstructs(before.projection, delta, nextState)) {
         protocol("SQLite authority state delta does not reconstruct its commit");
       }
-      const stateDigest = authorityStateDigest(nextState);
+      const nextStateJson = JSON.stringify(nextState);
+      const stateDigest = createHash("sha256").update(nextStateJson, "utf8").digest("hex");
+      const nextCommitDigest = hashCanonicalCommitEnvelope(
+        commitFields(identity, next, normalized.operation_id, normalized.events, normalized.receipts),
+        (hash) => { hash.update(nextStateJson, "utf8"); },
+      );
       if (isAuthorityStateCheckpoint(next)) {
         db.prepare("INSERT INTO checkpoints VALUES (?, ?, ?)")
-          .run(next.toString(), JSON.stringify(nextState), stateDigest);
+          .run(next.toString(), nextStateJson, stateDigest);
       }
       db.prepare("INSERT INTO commits VALUES (?, ?, ?, ?, ?, ?, ?, ?)").run(next.toString(),
         normalized.operation_id,
-        commitDigest(identity, next, normalized.operation_id, nextState, normalized.events, normalized.receipts),
+        nextCommitDigest,
         stateDigest, cursor === null ? null : before.digest,
         JSON.stringify(delta), JSON.stringify(normalized.events), JSON.stringify(normalized.receipts));
       db.prepare(`INSERT INTO head VALUES (1, ?, ?, ?)
         ON CONFLICT(singleton) DO UPDATE SET cursor = excluded.cursor, projection = excluded.projection,
-          state_digest = excluded.state_digest`).run(next.toString(), JSON.stringify(nextState), stateDigest);
+          state_digest = excluded.state_digest`).run(next.toString(), nextStateJson, stateDigest);
       committing = true;
       db.exec("COMMIT"); transactionOpen = false;
       return {status: "applied", provider_revision: `${identity}:${next}`, cursor: next.toString()};
@@ -570,9 +592,9 @@ export class SqliteAuthorityStore implements AuthorityStore {
       const head = this.current(db);
       if (head === null) return missing();
       const ranges = new Map<bigint, {from: bigint; to: bigint}>();
+      const selectByOperation = db.prepare(`SELECT ${COMMIT_COLUMNS} FROM commits WHERE operation_id = ?`);
       const selected = operationIds.map(id => {
-        const row = db!.prepare(`SELECT ${COMMIT_COLUMNS} FROM commits WHERE operation_id = ?`)
-          .get(id) as unknown as Record<string, unknown> | undefined;
+        const row = selectByOperation.get(id) as unknown as Record<string, unknown> | undefined;
         if (!row) return null;
         const cursor = this.decodeCommitRow(row).cursor;
         const checkpoint = authorityStateCheckpointCursor(cursor);
@@ -655,12 +677,15 @@ export class SqliteAuthorityStore implements AuthorityStore {
         return {schema_version: "loopx_sqlite_authority_history_audit_v0", status: "verified", commits: 0, checkpoints: 0};
       }
       const counted = db.prepare("SELECT COUNT(*) AS count FROM checkpoints").get();
+      const pageStmt = db.prepare(`SELECT ${COMMIT_COLUMNS} FROM commits WHERE cursor > ? ORDER BY cursor LIMIT ?`);
+      const checkpointStmt = db.prepare(
+        "SELECT cursor, projection, projection_digest FROM checkpoints WHERE cursor = ?",
+      );
       let state: SqliteReplayCursor = {cursor: 0n, digest: "", replay: new AuthorityStateReplay({})};
       let cursor = 0n;
       let commits = 0;
       for (;;) {
-        const rows = db.prepare(`SELECT ${COMMIT_COLUMNS} FROM commits WHERE cursor > ? ORDER BY cursor LIMIT ?`)
-          .all(cursor.toString(), BigInt(AUDIT_PAGE)) as unknown as Record<string, unknown>[];
+        const rows = pageStmt.all(cursor.toString(), BigInt(AUDIT_PAGE)) as unknown as Record<string, unknown>[];
         if (rows.length === 0) break;
         for (const raw of rows) {
           const row = this.decodeCommitRow(raw);
@@ -668,7 +693,7 @@ export class SqliteAuthorityStore implements AuthorityStore {
           // delta can never diverge from the history it claims to extend.
           const replayed = this.verifyCommitRow(row, identity, {kind: "predecessor", state});
           if (isAuthorityStateCheckpoint(row.cursor)) {
-            const checkpoint = this.loadCheckpoint(db, row.cursor);
+            const checkpoint = this.loadCheckpoint(db, row.cursor, checkpointStmt);
             const sealed = this.verifyCommitRow(row, identity, {kind: "sealed", state: checkpoint});
             if (sealed.digest !== replayed.digest ||
                 sealed.replay.canonicalJson() !== replayed.replay.canonicalJson()) {

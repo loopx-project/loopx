@@ -49,7 +49,6 @@ _REGISTRY_OPTIONAL_COMMANDS = frozenset(
 		"uninstall-project",
 		"version",
 		"workbench",
-		"postgres",
 		"host-mode-plan",
 		"migrate-local-state",
 	}
@@ -65,7 +64,7 @@ _SELECTED_COMMANDS = _STATUS_COMMANDS | GLOBAL_READ_COMMANDS | PROJECT_LIFECYCLE
 	"todo", "quota", "task-lease", "change-window", "delegation", "turn", "doctor", "commands", "version",
 	"bootstrap", "connect", "configure-goal", "start-goal", "bootstrap-command-pack",
 	"register-agent", "bind-agent-thread",
-	"authority-archive", "postgres", "coordination-shadow", "extension", "slash-commands",
+	"authority-archive", "coordination-shadow", "extension", "slash-commands",
 	"manager-inbox",
 	"agent-context", "agent-directory", "agent-capabilities",
 	"handoff", "handoff-mode",
@@ -79,8 +78,11 @@ _SELECTED_COMMANDS = _STATUS_COMMANDS | GLOBAL_READ_COMMANDS | PROJECT_LIFECYCLE
 	"workbench",
 	"history",
 }
+# Retired from Core-only suppression once Explore CLI ships via RESEARCH_DISTRIBUTION.
+_FULL_INSTALL_SELECTED_COMMANDS: frozenset[str] = frozenset()
 # Existing CLI vocabulary; this set chooses loading, not operation authority.
 _CAPABILITY_DISCOVERY_COMMANDS = frozenset({"list", "show"})
+_WORKSPACE_COMMANDS = frozenset({"chat", "chat-endpoint", "dashboard"})
 
 
 class LoopXArgumentParser(argparse.ArgumentParser):
@@ -346,9 +348,13 @@ def cli_invocation_route(argv: list[str]):
 
 def _register_registry_inspection_commands(subparsers: argparse._SubParsersAction) -> None:
 	"""Share the existing registry grammar with the complete support parser."""
-	subparsers.add_parser(
+	registry_parser = subparsers.add_parser(
 		"registry", help="Inspect registry goals and adapter declarations."
 	)
+	registry_parser.add_argument("--goal-id", help="Show one exact Goal id; keep registry-wide diagnostics.")
+	registry_parser.add_argument("--query", help="Case-insensitive literal search in Goal id, repo, domain, status or adapter kind.")
+	registry_parser.add_argument("--limit", type=int, help="Maximum matching Goal rows (default 20 when selecting).")
+	registry_parser.add_argument("--offset", type=int, help="Skip this many matches in registry order (default 0).")
 	registry_boundary_parser = subparsers.add_parser(
 		"registry-boundary",
 		help="Classify a registry file as local-only, global-local, public projection, or public fixture.",
@@ -385,6 +391,13 @@ def _handle_registry_inspection_command(
 	"""Keep one inspection adapter and the full CLI's existing patch points."""
 	if args.command == "registry":
 		payload = inspect_registry(registry_path)
+		from .cli_commands.registry_inspection import select_registry_goals
+
+		try:
+			payload = select_registry_goals(payload, goal_id=args.goal_id, query=args.query,
+				limit=args.limit, offset=args.offset)
+		except ValueError as exc:
+			payload = {**payload, "ok": False, "error": str(exc), "goals": []}
 		print_payload(payload, args.format, render_registry_markdown)
 		return 0 if payload.get("ok") else 1
 
@@ -509,10 +522,6 @@ def _build_selected_parser(command: str) -> LoopXArgumentParser:
 		from .cli_commands.authority_archive import register_authority_archive_command
 
 		register_authority_archive_command(subparsers, add_subcommand_format)
-	elif command == "postgres":
-		from .cli_commands.postgres import register_postgres_commands
-
-		register_postgres_commands(subparsers, add_subcommand_format)
 	elif command == "coordination-shadow":
 		from .cli_commands.coordination_shadow import register_coordination_shadow_command
 
@@ -565,6 +574,10 @@ def _build_selected_parser(command: str) -> LoopXArgumentParser:
 		from .cli_commands.history import register_history_command
 
 		register_history_command(subparsers)
+	elif command == "explore":
+		from .cli_commands.explore import register_explore_commands
+
+		register_explore_commands(subparsers, add_subcommand_format)
 	else:  # pragma: no cover - caller guards the private interface
 		raise ValueError(f"unsupported selected command: {command}")
 	return parser
@@ -722,13 +735,6 @@ def _dispatch_common_command(
 			args, registry_path=registry_path, runtime_root_arg=args.runtime_root,
 			output_format=output_format, print_payload=print_payload,
 		)
-	if args.command == "postgres":
-		from .cli_commands.postgres import handle_postgres_command
-
-		return handle_postgres_command(
-			args, registry_path=registry_path, runtime_root_arg=args.runtime_root,
-			output_format=output_format, print_payload=print_payload,
-		)
 	if args.command == "coordination-shadow":
 		from .cli_commands.coordination_shadow import handle_coordination_shadow_command
 
@@ -762,12 +768,14 @@ def _dispatch_common_command(
 			build_command_reference_payload, render_command_reference_markdown,
 		)
 
-		print_payload(
-			build_command_reference_payload(
-				available_commands=_SELECTED_COMMANDS if _standalone_core() else None,
-			), output_format(args),
-			render_command_reference_markdown,
-		)
+		available_commands: frozenset[str] | None = None
+		if _standalone_core():
+			selected = set(_available_selected_commands())
+			if _workspace_installed():
+				selected |= _WORKSPACE_COMMANDS
+			available_commands = frozenset(selected)
+		print_payload(build_command_reference_payload(available_commands=available_commands),
+			output_format(args), render_command_reference_markdown)
 		return 0
 	if args.command == "delegation":
 		from .cli_commands.delegation import handle_delegation
@@ -901,6 +909,16 @@ def _dispatch_common_command(
 			print_payload=print_payload,
 			append_cli_rollout_event=append_cli_rollout_event,
 		)
+	if args.command == "explore":
+		from .cli_commands.explore import handle_explore_command
+
+		return handle_explore_command(
+			args,
+			registry_path=registry_path,
+			runtime_root_arg=args.runtime_root,
+			print_payload=print_payload,
+			output_format=output_format,
+		)
 	return None
 
 
@@ -930,6 +948,7 @@ def _dispatch_selected(args: argparse.Namespace, raw_argv: list[str]) -> int:
 	if guard_result is not None:
 		return guard_result
 	registry_path, registry_was_configured = resolve_cli_registry(args, raw_argv)
+	result: int | None
 	if args.command == "workbench":
 		from .cli_commands.workbench import handle_workbench_command
 
@@ -976,6 +995,56 @@ def _dispatch_selected(args: argparse.Namespace, raw_argv: list[str]) -> int:
 			args, registry_path=registry_path, runtime_root_arg=args.runtime_root,
 			print_payload=print_payload,
 		)
+	elif args.command == "benchmark":
+		from .cli_commands.benchmark_dispatch import handle_benchmark_command
+
+		result = handle_benchmark_command(
+			args, registry_path=registry_path, print_payload=print_payload, output_format=output_format,
+		)
+	elif args.command == "agent-turn-recall":
+		from .capabilities.agent_turn_recall.cli import handle_agent_turn_recall_command
+
+		result = handle_agent_turn_recall_command(
+			args, registry_path=registry_path, output_format=output_format, print_payload=print_payload,
+		)
+	elif args.command == "issue-fix":
+		from .capabilities.issue_fix.cli import handle_issue_fix_command
+		from .cli_commands.lark_inbox import build_lark_issue_fix_reviewer_provider_hooks
+
+		result = handle_issue_fix_command(
+			args, registry_path=registry_path, runtime_root_arg=args.runtime_root,
+			reviewer_provider_hooks_factory=lambda: build_lark_issue_fix_reviewer_provider_hooks(
+				runtime_root_arg=args.runtime_root,
+			),
+			output_format=output_format, print_payload=print_payload,
+		)
+	elif args.command == "pr-review":
+		from .cli_commands.pr_review import handle_pr_review_command
+		from .paths import effective_runtime_root
+
+		result = handle_pr_review_command(
+			args, registry_path=registry_path, output_format=output_format, print_payload=print_payload,
+			runtime_root=effective_runtime_root(registry_path, args.runtime_root) if registry_path.exists() else None,
+		)
+	elif args.command in _WORKSPACE_COMMANDS:
+		from .cli_commands.support_control import handle_support_control_command
+
+		result = handle_support_control_command(
+			args, registry_path=registry_path,
+			registry_was_supplied=user_supplied_registry(raw_argv),
+			print_payload=print_payload, output_format=output_format,
+		)
+	elif args.command == "deepresearch":
+		from .cli_commands.deepresearch import handle_deepresearch_command
+
+		result = handle_deepresearch_command(args, output_format=output_format, print_payload=print_payload)
+	elif args.command == "external-evidence":
+		from .capabilities.external_research.cli import handle_external_evidence_command
+
+		result = handle_external_evidence_command(
+			args, output_format=output_format, print_payload=print_payload,
+			registry_path=registry_path,
+		)
 	else:
 		result = dispatch_common_command(
 			args,
@@ -986,6 +1055,27 @@ def _dispatch_selected(args: argparse.Namespace, raw_argv: list[str]) -> int:
 	if result is None:  # pragma: no cover - caller guards the private interface
 		raise AssertionError(f"selected command was not dispatched: {args.command}")
 	return result
+
+
+def _available_selected_commands() -> frozenset[str]:
+	from .capabilities.agent_turn_recall.catalog_entry import agent_turn_recall_installed
+	from .capabilities.benchmark_toolkit.catalog_entry import benchmark_toolkit_installed
+	from .capabilities.deep_research.catalog_entry import research_workflows_installed
+	from .capabilities.issue_fix.catalog_entry import issue_fix_workflow_installed
+	from .capabilities.pr_review_queue.catalog_entry import pull_request_review_installed
+
+	commands = set(_SELECTED_COMMANDS)
+	if benchmark_toolkit_installed(builtin_cli_present=False):
+		commands.add("benchmark")
+	if agent_turn_recall_installed(builtin_cli_present=False):
+		commands.add("agent-turn-recall")
+	if pull_request_review_installed(builtin_cli_present=False):
+		commands.add("pr-review")
+	if issue_fix_workflow_installed(builtin_cli_present=False):
+		commands.add("issue-fix")
+	if research_workflows_installed(builtin_cli_present=False):
+		commands.update(("explore", "deepresearch", "external-evidence"))
+	return frozenset(commands)
 
 
 def _standalone_core() -> bool:
@@ -1006,6 +1096,47 @@ def _standalone_core() -> bool:
 		return installed_loopx_distribution(distribution).name == "loopx-core"
 	except PackageNotFoundError:
 		return False
+
+
+def inspect_workspace_distribution(*, builtin_cli_present: bool | None = None) -> dict[str, Any]:
+	"""Inspect whether the optional Workspace wheel is installed and matches Core."""
+	from .python_install_owner import (
+		WORKSPACE_DISTRIBUTION,
+		inspect_builtin_capability_distribution,
+	)
+
+	return inspect_builtin_capability_distribution(
+		WORKSPACE_DISTRIBUTION,
+		(
+			"loopx.chat",
+			"loopx.chat_loopx_mode",
+			"loopx.chat_manager",
+			"loopx.chat_runtime",
+			"loopx.chat_server",
+			"loopx.chat_store",
+			"loopx.dashboard_launcher",
+			"loopx.cli_commands.support_control_chat",
+			"loopx.cli_commands.support_control_chat_endpoint",
+			"loopx.capabilities.native_chat.session_calendar_tasks",
+			"loopx.capabilities.native_chat.steward_managed_mode",
+			"loopx.capabilities.native_chat.steward_monitor",
+			"loopx.capabilities.native_chat.steward_reports",
+			"loopx.capabilities.native_chat.steward_turn",
+			"loopx.extensions.lark.steward_reports",
+			"loopx.presentation.research_analysis_api",
+			"loopx.presentation.runtime_workspace",
+		),
+		builtin_cli_present=builtin_cli_present,
+		resources=(
+			"loopx/chat/endpoints.py",
+			"loopx/chat/lark_api.py",
+			"loopx/control_plane/collaboration/steward_reports.ts",
+		),
+	)
+
+
+def _workspace_installed() -> bool:
+	return bool(inspect_workspace_distribution(builtin_cli_present=False)["ready"])
 
 
 def _run_full_cli(raw_argv: list[str]) -> int:
@@ -1032,8 +1163,9 @@ def main(argv: list[str] | None = None) -> int:
 	from .help_surface import render_concise_help, top_level_help_requested
 
 	if top_level_help_requested(raw_argv):
+		standalone = _standalone_core()
 		print(render_concise_help(sys.argv[0] if argv is None else "loopx",
-			standalone_core=_standalone_core()), end="")
+			standalone_core=standalone, workspace_installed=standalone and _workspace_installed()), end="")
 		return 0
 	command = _top_level_command(raw_argv)
 	if command is None and _standalone_core():
@@ -1061,6 +1193,78 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def _run_command(command: str | None, raw_argv: list[str]) -> int:
+	if command == "benchmark" and _standalone_core():
+		from .capabilities.benchmark_toolkit.catalog_entry import (
+			BENCHMARK_TOOLKIT_INSTALL_HINT, benchmark_toolkit_installed,
+		)
+
+		parser, subparsers = build_cli_parser()
+		if not benchmark_toolkit_installed(builtin_cli_present=False):
+			parser.error(f"benchmark is unavailable in the standalone core. {BENCHMARK_TOOLKIT_INSTALL_HINT}")
+		try:
+			from .cli_commands.benchmark_dispatch import register_benchmark_command_group
+
+			register_benchmark_command_group(subparsers, add_subcommand_format)
+		except ModuleNotFoundError as exc:
+			if not (exc.name or "").startswith(
+				("loopx.capabilities.benchmark_toolkit", "loopx.cli_commands.benchmark_")
+			):
+				raise
+			parser.error(f"benchmark is unavailable in the standalone core. {BENCHMARK_TOOLKIT_INSTALL_HINT}")
+		return _dispatch_selected(parse_cli_args(parser, raw_argv), raw_argv)
+	if command in {"agent-turn-recall", "pr-review", "issue-fix"} and _standalone_core():
+		parser, subparsers = build_cli_parser()
+		if command == "agent-turn-recall":
+			from .capabilities.agent_turn_recall.catalog_entry import RECALL_INSTALL_HINT, agent_turn_recall_installed
+
+			if not agent_turn_recall_installed(builtin_cli_present=False):
+				parser.error(f"agent-turn-recall is unavailable in the standalone core. {RECALL_INSTALL_HINT}")
+			from .capabilities.agent_turn_recall.cli import register_agent_turn_recall_commands as register
+		elif command == "pr-review":
+			from .capabilities.pr_review_queue.catalog_entry import PR_REVIEW_INSTALL_HINT, pull_request_review_installed
+
+			if not pull_request_review_installed(builtin_cli_present=False):
+				parser.error(f"pr-review is unavailable in the standalone core. {PR_REVIEW_INSTALL_HINT}")
+			from .cli_commands.pr_review import register_pr_review_command as register
+		else:
+			from .capabilities.issue_fix.catalog_entry import ISSUE_FIX_INSTALL_HINT, issue_fix_workflow_installed
+
+			if not issue_fix_workflow_installed(builtin_cli_present=False):
+				parser.error(f"issue-fix is unavailable in the standalone core. {ISSUE_FIX_INSTALL_HINT}")
+			from .capabilities.issue_fix.cli import register_issue_fix_commands as register
+
+		register(subparsers, add_subcommand_format)
+		return _dispatch_selected(parse_cli_args(parser, raw_argv), raw_argv)
+	if command in {"explore", "deepresearch", "external-evidence"} and _standalone_core():
+		from .capabilities.deep_research.catalog_entry import RESEARCH_INSTALL_HINT, research_workflows_installed
+
+		parser, subparsers = build_cli_parser()
+		if not research_workflows_installed(builtin_cli_present=False):
+			parser.error(f"{command} is unavailable in the standalone core. {RESEARCH_INSTALL_HINT}")
+		if command == "explore":
+			from .cli_commands.explore import register_explore_commands
+
+			register_explore_commands(subparsers, add_subcommand_format)
+		elif command == "deepresearch":
+			from .cli_commands.deepresearch import register_deepresearch_command
+
+			register_deepresearch_command(subparsers, add_subcommand_format)
+		else:
+			from .capabilities.external_research.cli import register_external_evidence_commands
+
+			register_external_evidence_commands(subparsers, add_subcommand_format)
+		return _dispatch_selected(parse_cli_args(parser, raw_argv), raw_argv)
+	if command in _WORKSPACE_COMMANDS and _standalone_core():
+		parser, subparsers = build_cli_parser()
+		if not _workspace_installed():
+			parser.error(
+				"this command is unavailable in the standalone core; "
+				"install the matching loopx-workspace wheel in this environment"
+			)
+		from .cli_commands.support_control_chat import register_chat_and_dashboard_commands
+
+		register_chat_and_dashboard_commands(subparsers, add_subcommand_format)
+		return _dispatch_selected(parse_cli_args(parser, raw_argv), raw_argv)
 	if command == "version":
 		version_exports = sys.modules.get("loopx.cli_commands")
 		# Inspect bound exports without triggering the lazy facade. Explicit
@@ -1074,7 +1278,7 @@ def _run_command(command: str | None, raw_argv: list[str]) -> int:
 	if command == "history" and "loopx.cli" in sys.modules:
 		# An explicitly loaded facade keeps its existing handler/renderer bindings.
 		return _run_full_cli(raw_argv)
-	if command in _SELECTED_COMMANDS:
+	if command in _SELECTED_COMMANDS or (command == "explore" and not _standalone_core()):
 		try:
 			args = parse_cli_args(_build_selected_parser(command), raw_argv)
 		except _SelectedParseRejected:

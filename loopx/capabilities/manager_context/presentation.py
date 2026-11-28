@@ -1,5 +1,10 @@
 """Owner-local collaboration readback in the conversation that delegated it."""
 
+from collections import OrderedDict
+from pathlib import Path
+import sys
+from threading import Lock
+
 from . import _read, _root, _hash
 from .tracking import _entry, _receipt
 from .roundtrip import reply_status
@@ -14,6 +19,51 @@ from ...control_plane.collaboration.goal_instance_scope import (
     decide_collaboration_lifecycle,
 )
 from ...control_plane.collaboration.inbox import controlled_request_readback
+
+_TERMINAL_STATUSES = frozenset({"completed", "interrupted", "timed_out", "failed"})
+_PLAIN_TURN_CACHE_MAX = 16384
+_PLAIN_TURN_LOCK = Lock()
+_PLAIN_TURN_FINGERPRINTS: OrderedDict[Path, tuple[int, int, int, int, int]] = OrderedDict()
+
+
+def _load_collaboration_turn(store, session_id: str, turn_id: str):
+    turn_path_fn = getattr(store, "_turn_path", None)
+    fp: tuple[int, int, int, int, int] | None = None
+    path: Path | None = None
+    if sys.platform != "win32" and callable(turn_path_fn):
+        try:
+            candidate = turn_path_fn(session_id, turn_id)
+            if isinstance(candidate, Path):
+                path = candidate
+                st = path.stat()
+                fp = (st.st_dev, st.st_ino, st.st_mtime_ns, st.st_ctime_ns, st.st_size)
+                with _PLAIN_TURN_LOCK:
+                    if _PLAIN_TURN_FINGERPRINTS.get(path) == fp:
+                        _PLAIN_TURN_FINGERPRINTS.move_to_end(path)
+                        return {"response": {}}
+        except (OSError, ValueError):
+            fp = None
+    load_turn = getattr(store, "load_turn")
+    turn = load_turn(session_id, turn_id) or {}
+    if path is not None and fp is not None and isinstance(turn, dict):
+        response = turn.get("response")
+        if (
+            turn.get("status") in _TERMINAL_STATUSES
+            and isinstance(response, dict)
+            and response.get("context_handoff_receipts") is None
+            and not response.get("context_handoff_receipt")
+        ):
+            try:
+                st_after = path.stat()
+                if (st_after.st_dev, st_after.st_ino, st_after.st_mtime_ns, st_after.st_ctime_ns, st_after.st_size) == fp:
+                    with _PLAIN_TURN_LOCK:
+                        _PLAIN_TURN_FINGERPRINTS[path] = fp
+                        _PLAIN_TURN_FINGERPRINTS.move_to_end(path)
+                        while len(_PLAIN_TURN_FINGERPRINTS) > _PLAIN_TURN_CACHE_MAX:
+                            _PLAIN_TURN_FINGERPRINTS.popitem(last=False)
+            except OSError:
+                pass
+    return turn
 
 
 def project_collaboration(
@@ -50,7 +100,7 @@ def project_collaboration(
     for message in messages:
         tid = message.get("turn_id")
         if tid and carriers.get(tid) == message.get("message_id") and tid not in turns:
-            turns[tid] = store.load_turn(session_id, tid) or {}
+            turns[tid] = _load_collaboration_turn(store, session_id, tid)
     missing_clients = {
         turn.get("client_turn_id")
         for turn in turns.values()

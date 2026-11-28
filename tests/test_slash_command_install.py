@@ -5,7 +5,7 @@ import pytest
 
 from loopx.entrypoint import main as loopx_main
 from loopx import slash_command_install
-from loopx.pi_goal_mode.installation import inspect_pi_installations
+from loopx.hosts.pi.installation import inspect_pi_installations
 from loopx.slash_command_install import (
     install_slash_commands,
     materialize_loopx_entry_skill,

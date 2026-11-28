@@ -12,7 +12,11 @@ import { relative, resolve, sep } from "node:path";
 import type { JsonObject } from "./effect_program.ts";
 import { EffectRuntimeRequestError } from "./effect_runtime_errors.ts";
 import { jsonObject, requireNonEmptyString } from "./runtime_decode.ts";
-import { readReceiptLogSnapshot } from "./runtime/receipt_log_snapshot.ts";
+import {
+  readReceiptLogSnapshot,
+  readReceiptLogSnapshotWithStat,
+  type ReceiptLogStat,
+} from "./runtime/receipt_log_snapshot.ts";
 
 export const ROLLOUT_EVENT_SCHEMA_VERSION = "loopx_rollout_event_v0";
 export const HEARTBEAT_RECEIPT_EVENT_KIND = "quota_should_run";
@@ -90,23 +94,44 @@ export function goalRolloutEventLogPath(
   return path;
 }
 
+export interface GoalRolloutEventSnapshotWithStat {
+  readonly snapshot: GoalRolloutEventSnapshot | null;
+  readonly logPath: string;
+  readonly stat: ReceiptLogStat;
+  readonly stable: boolean;
+}
+
+/** Read and parse the rollout log once, retaining strict-read diagnostics and exact stat. */
+export async function readGoalRolloutEventSnapshotWithStat(
+  runtimeRoot: string,
+  goalId: string,
+): Promise<GoalRolloutEventSnapshotWithStat> {
+  const logPath = goalRolloutEventLogPath(runtimeRoot, goalId);
+  const result = await readReceiptLogSnapshotWithStat(
+    logPath,
+    ROLLOUT_EVENT_SCHEMA_VERSION,
+    ADMISSION_IDENTITY_MEMBERS,
+  );
+  return {
+    snapshot: result.snapshot === null ? null : {
+      runtimeRoot, goalId, events: result.snapshot.records,
+      eventLines: result.snapshot.recordLines,
+      malformedLines: result.snapshot.malformedLines,
+      firstStrictErrorLine: result.snapshot.firstErrorLine,
+      unterminatedRecordLine: result.snapshot.unterminatedRecordLine,
+    },
+    logPath,
+    stat: result.stat,
+    stable: result.stable,
+  };
+}
+
 /** Read and parse the rollout log once, retaining strict-read diagnostics. */
 export async function readGoalRolloutEventSnapshot(
   runtimeRoot: string,
   goalId: string,
 ): Promise<GoalRolloutEventSnapshot | null> {
-  const snapshot = await readReceiptLogSnapshot(
-    goalRolloutEventLogPath(runtimeRoot, goalId),
-    ROLLOUT_EVENT_SCHEMA_VERSION,
-    ADMISSION_IDENTITY_MEMBERS,
-  );
-  return snapshot === null ? null : {
-    runtimeRoot, goalId, events: snapshot.records,
-    eventLines: snapshot.recordLines,
-    malformedLines: snapshot.malformedLines,
-    firstStrictErrorLine: snapshot.firstErrorLine,
-    unterminatedRecordLine: snapshot.unterminatedRecordLine,
-  };
+  return (await readGoalRolloutEventSnapshotWithStat(runtimeRoot, goalId)).snapshot;
 }
 
 /**

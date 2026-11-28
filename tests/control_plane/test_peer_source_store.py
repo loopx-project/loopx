@@ -11,7 +11,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from canonical_authority_fixture import isolate_sqlite_runtime, promoted_create_fixture
+from tests.control_plane.canonical_authority_fixture import isolate_sqlite_runtime, promoted_create_fixture
 from loopx.capabilities.manager_context import POLICY_SCHEMA, _hash, _root, _write, register_ingress
 from loopx.chat.coordination import apply_context_handoff
 from loopx.chat_store import ChatSessionStore

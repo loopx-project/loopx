@@ -99,10 +99,30 @@ amends those grants.
 
 ## Open Core And Commercial Boundaries
 
-This repository's unified open source core is Apache-2.0. A separately
-delivered Managed Control Plane, enterprise-only modules, hosted operations,
-or implementation and support services may use separate commercial terms when
-they are not part of this repository's Apache-2.0 core distribution.
+This repository's unified open source core (`loopx-project/loopx`) is 100%
+Apache-2.0. In particular:
+
+- Local `File` and `SQLite` authority stores, portable state export/archive,
+  the provider injection SPI (`local_authority_provider.ts`), and the outbound
+  HTTPS `RemoteAuthority` wire contract and client
+  ([`remote_authority_contract.ts`](../../loopx/control_plane/coordination/remote_authority_contract.ts),
+  [`remote_authority_http.ts`](../../loopx/control_plane/coordination/remote_authority_http.ts),
+  [`remote_authority_probe.ts`](../../loopx/control_plane/coordination/remote_authority_probe.ts),
+  [`remote_authority_gateway.py`](../../loopx/control_plane/coordination/remote_authority_gateway.py),
+  and [`remote-authority-client.ts`](../../examples/coordination/remote-authority-client.ts))
+  remain Apache-2.0 in `loopx-project/loopx`.
+- Server-side PostgreSQL authority, distributed lease coordination, and
+  multi-tenant governance live in the private/separately licensed
+  `loopx-project/loopx-cloud` repository (unauthenticated public GitHub access
+  returns HTTP 404; migrated base files preserve full Apache-2.0 `LICENSE` and
+  `NOTICE` attributions). The pre-split Apache-2.0 self-hosted PostgreSQL
+  baseline stays publicly readable at the frozen `v2.4.0` release (tag
+  `5037daecee`, commit `a6ffb3be6e`) in `loopx-project/loopx`.
+
+A separately delivered Managed Control Plane (`loopx-project/loopx-cloud`,
+private/separately licensed), enterprise-only modules, hosted operations, or
+implementation and support services may use separate commercial terms when they
+are not part of this repository's Apache-2.0 core distribution.
 
 Apache-2.0 itself permits commercial use, modification, and distribution
 subject to its terms. The separate project-name and logo guidance in

@@ -46,8 +46,18 @@ def _load_baseline_module(
     module = ModuleType("loopx._baseline_slash_command_install")
     module.__file__ = str(REPOSITORY_ROOT / relpath)
     module.__package__ = "loopx"
+    # Historical commit e5d5945f6 imported kiro_cli_goal_mode, opencode_goal_mode,
+    # and pi_goal_mode before those packages moved under loopx/hosts/; agy_goal_mode
+    # continues resolving via its compatibility shim.
+    compiled_source = (
+        source.replace("from .kiro_cli_goal_mode", "from .hosts.kiro_cli")
+        .replace("from .opencode_goal_mode", "from .hosts.opencode")
+        .replace("from .pi_goal_mode", "from .hosts.pi")
+        if source_override is None
+        else source
+    )
     try:
-        code = compile(source, f"{commit}:{relpath}", "exec")
+        code = compile(compiled_source, f"{commit}:{relpath}", "exec")
         exec(code, module.__dict__)
     except Exception as exc:
         raise RuntimeError(

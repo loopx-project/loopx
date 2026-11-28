@@ -363,9 +363,10 @@ function admitReportSelectionRecovery(params: JsonObject, request: JsonObject, s
     throw new EffectRuntimeRequestError("report continuation requires its canonical host-only admission stop; retain all model or unknown work");
   }
   if (journal.status === "failed" && journal.result_kind === "validation_failed"
-      && journal.validation_stage === "host_result_contract") {
+      && (journal.validation_stage === "host_result_contract"
+        || journal.validation_stage === "task_postcondition")) {
     // Only once the blocking autonomous replan obligation is cleared elsewhere
-    // may a report whose prior governance probe failed host contract validation
+    // may a report whose prior governance probe failed pre-commit validation
     // resume cleanly via one bounded .admission-resume carrier.
     const receipt = requireJsonObject(journal.receipt, "probe receipt");
     const eligibility = requireJsonObject(receipt.commit_eligibility, "probe commit eligibility");

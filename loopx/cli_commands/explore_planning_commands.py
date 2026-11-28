@@ -3,7 +3,7 @@ from __future__ import annotations
 import argparse
 from typing import Callable
 
-from ..capabilities.explore.worker_branch_plan import (
+from ..capabilities.explore.harness_gate import (
     DEFAULT_WORKER_HARNESS_PROFILE,
     worker_harness_profile_names,
 )

@@ -708,6 +708,7 @@ class CliPlanningBatchBackend:
             cwd=self.cwd,
             env=self.env,
             text=True,
+            encoding="utf-8",
             capture_output=True,
             timeout=120,
             creationflags=no_console_creationflags(),

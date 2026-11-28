@@ -2,10 +2,48 @@ from __future__ import annotations
 
 from typing import Any
 
+from ...python_install_owner import BENCHMARK_TOOLKIT_DISTRIBUTION, inspect_builtin_capability_distribution
 from .four_arm_contract import (
     BENCHMARK_FOUR_ARM_ATTESTATIONS,
     BENCHMARK_FOUR_ARM_RUNNER_OBLIGATIONS,
 )
+
+BENCHMARK_TOOLKIT_INSTALL_HINT = (
+    "Install the matching loopx-capability-benchmark-toolkit wheel "
+    "or use the ordinary LoopX installation."
+)
+
+
+BENCHMARK_TOOLKIT_STARTUP_MODULES = (
+    "loopx.cli_commands.benchmark_dispatch",
+    "loopx.cli_commands.benchmark_boundary",
+    "loopx.cli_commands.benchmark_concurrency",
+    "loopx.cli_commands.benchmark_continuation",
+    "loopx.cli_commands.benchmark_experiment_board",
+    "loopx.cli_commands.benchmark_rebalance",
+    "loopx.cli_commands.benchmark_study",
+    "loopx.cli_commands.benchmark_token_capacity",
+    "loopx.cli_commands.benchmark_trajectory",
+    "loopx.capabilities.benchmark_toolkit.trajectory_assessment_store",
+)
+
+
+def inspect_benchmark_toolkit_distribution(
+    *, builtin_cli_present: bool | None = None,
+) -> dict[str, Any]:
+    """Inspect whether the optional benchmark-toolkit wheel is installed and matches Core."""
+    return inspect_builtin_capability_distribution(
+        BENCHMARK_TOOLKIT_DISTRIBUTION,
+        BENCHMARK_TOOLKIT_STARTUP_MODULES,
+        builtin_cli_present=builtin_cli_present,
+    )
+
+
+def benchmark_toolkit_installed(*, builtin_cli_present: bool | None = None) -> bool:
+    return bool(
+        inspect_benchmark_toolkit_distribution(builtin_cli_present=builtin_cli_present)["ready"]
+    )
+
 
 BENCHMARK_TOOLKIT_CATALOG_ENTRY: dict[str, Any] = {
     "id": "benchmark-toolkit",

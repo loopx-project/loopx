@@ -1,387 +1,117 @@
+"""Autonomous replan obligation composition and run-history entrypoints."""
+
 from __future__ import annotations
 
-import hashlib
-import json
-import shlex
-from collections.abc import Callable, Mapping
-from typing import Any
+from collections.abc import Callable, Mapping, Sequence, Set as AbstractSet
+from typing import cast
 
-from ..todos.contract import (
-    normalize_todo_id,
-    normalize_todo_replan_obligation_id,
+from .autonomous_replan_policy import (
+    AUTONOMOUS_REPLAN_DEFAULT_STOP_CONDITION as AUTONOMOUS_REPLAN_DEFAULT_STOP_CONDITION,
+    AUTONOMOUS_REPLAN_DEFAULT_STOP_CONTRACT_ID as AUTONOMOUS_REPLAN_DEFAULT_STOP_CONTRACT_ID,
+    AUTONOMOUS_REPLAN_DIGEST_COMPATIBILITY_STOP_CONDITION as AUTONOMOUS_REPLAN_DIGEST_COMPATIBILITY_STOP_CONDITION,
+    AUTONOMOUS_REPLAN_STALL_THRESHOLD as AUTONOMOUS_REPLAN_STALL_THRESHOLD,
+    MAX_AUTONOMOUS_REPLAN_TRIGGERS as MAX_AUTONOMOUS_REPLAN_TRIGGERS,
+    MONITOR_NO_CHANGE_STREAK_THRESHOLD as MONITOR_NO_CHANGE_STREAK_THRESHOLD,
+    REPLAN_NOVELTY_GUIDANCE as REPLAN_NOVELTY_GUIDANCE,
+    REPLAN_NOVELTY_POLICY_SCHEMA_VERSION as REPLAN_NOVELTY_POLICY_SCHEMA_VERSION,
+    TODO_LIFECYCLE_SETTLEMENT_RESOLUTION_MODE as TODO_LIFECYCLE_SETTLEMENT_RESOLUTION_MODE,
+    Payload as Payload,
+    PayloadView as PayloadView,
+    PublicSafeText as PublicSafeText,
+    build_autonomous_replan_cli_actions as build_autonomous_replan_cli_actions,
+    build_replan_novelty_policy as build_replan_novelty_policy,
+    ensure_replan_novelty_policy as ensure_replan_novelty_policy,
+    extra_fields_for_summary,
+    project_todo_lifecycle_settlement_reentry as project_todo_lifecycle_settlement_reentry,
+    recommended_action_for_summary,
+    replan_obligation_id_from_packet as replan_obligation_id_from_packet,
+    summarize_trigger_evidence,
+    todo_actions_for_summary,
+    todo_lifecycle_settlement_obligation as todo_lifecycle_settlement_obligation,
+    with_replan_novelty_guidance as with_replan_novelty_guidance,
 )
-from .external_progress_review import (
-    EXTERNAL_PROGRESS_REVIEW_TRIGGER_KIND,
-    external_progress_review_obligation,
-)
-from .progress_observation import replan_writeback_requirements
+from .external_progress_review import external_progress_review_obligation
 from .replan_history_codec import project_replan_history
-from .replan_settlement import (
-    project_todo_lifecycle_settlement_reentry as project_todo_lifecycle_reentry_effect,
-)
+
+AckRecorded = Callable[[dict[str, object]], bool]
 
 
-PublicSafeText = Callable[..., str | None]
-AckRecorded = Callable[[dict[str, Any]], bool]
-
-
-MAX_AUTONOMOUS_REPLAN_TRIGGERS = 3
-AUTONOMOUS_REPLAN_STALL_THRESHOLD = 2
-AUTONOMOUS_REPLAN_DEFAULT_STOP_CONTRACT_ID = "autonomous_replan_default_v0"
-AUTONOMOUS_REPLAN_DEFAULT_STOP_CONDITION = (
-    "stop only the affected path when required access, destructive git, production actions, "
-    "or owner-only decisions exceed existing user authority. Keep authorized private reads "
-    "within their storage and publication boundaries; do not expose credentials or disclose "
-    "private material beyond that authority. Continue independent authorized replan work "
-    "while honoring explicit stops"
-)
-AUTONOMOUS_REPLAN_DIGEST_COMPATIBILITY_STOP_CONDITION = (
-    "stop this replan path until a compatible reader validates its digest-bound "
-    "review guard"
-)
-REPLAN_NOVELTY_POLICY_SCHEMA_VERSION = "replan_evidence_delivery_policy_v0"
-TODO_LIFECYCLE_SETTLEMENT_RESOLUTION_MODE = "todo_lifecycle_settlement"
-REPLAN_NOVELTY_GUIDANCE = (
-    " Use the host-projected coverage ledger and produce a typed semantic delta; "
-    "repeated observations cannot close replan."
-)
-
-
-def build_replan_novelty_policy() -> dict[str, str]:
-    """Bind replan evidence delivery to the host-projected ledger."""
-
-    return {
-        "schema_version": REPLAN_NOVELTY_POLICY_SCHEMA_VERSION,
-        "evidence_source": "compact_run_history",
-        "delivery": "host_projected",
-        "writeback": "typed_semantic_delta",
-    }
-
-
-def with_replan_novelty_guidance(action: str) -> str:
-    """Make the policy visible once on every replan primary action."""
-
-    marker = "host-projected coverage ledger"
-    normalized = str(action or "").strip()
-    if marker in normalized:
-        return normalized
-    return normalized + REPLAN_NOVELTY_GUIDANCE
-
-
-def replan_obligation_id_from_packet(value: Any) -> str | None:
-    packet: Mapping[str, Any] = value if isinstance(value, Mapping) else {}
-    return normalize_todo_replan_obligation_id(packet.get("obligation_id"))
-
-
-def todo_lifecycle_settlement_obligation(
-    value: Mapping[str, Any],
-) -> Mapping[str, Any] | None:
-    """Return the lifecycle-settlement subtype from a status payload or obligation."""
-
-    raw_obligation = value.get("autonomous_replan_obligation")
-    obligation: Mapping[str, Any] = (
-        raw_obligation if isinstance(raw_obligation, Mapping) else value
-    )
-    if obligation.get("resolution_mode") != TODO_LIFECYCLE_SETTLEMENT_RESOLUTION_MODE:
-        return None
-    return obligation
-
-
-def project_todo_lifecycle_settlement_reentry(
-    payload: Mapping[str, Any],
-    *,
-    goal_id: str,
-    lifecycle_actor_args: str,
-    scoped_cli_args: str,
-    runtime_root: str | None = None,
-    quota_guard_action: str | None = None,
-) -> dict[str, Any] | None:
-    """Adapt a lifecycle obligation to the TS-owned reentry projection."""
-
-    obligation = todo_lifecycle_settlement_obligation(payload)
-    if obligation is None:
-        return None
-    raw_triggers = obligation.get("triggers")
-    triggers = [
-        {
-            key: item.get(key)
-            for key in ("kind", "todo_id", "completion_turn_key")
-            if item.get(key) is not None
-        }
-        for item in (raw_triggers if isinstance(raw_triggers, list) else [])
-        if isinstance(item, Mapping)
-        and item.get("kind") == "completed_advancement_without_successor"
-        and normalize_todo_id(item.get("todo_id"))
-    ]
-    return project_todo_lifecycle_reentry_effect(
-        goal_id=goal_id,
-        runtime_root=runtime_root,
-        triggers=triggers,
-        lifecycle_actor_args=shlex.split(lifecycle_actor_args),
-        quota_scoped_args=shlex.split(scoped_cli_args),
-        quota_guard_argv=shlex.split(quota_guard_action) if quota_guard_action else None,
-    )
-
-
-def build_autonomous_replan_cli_actions(
-    payload: Mapping[str, Any],
-    *,
-    goal_id: str,
-    settlement_args: str,
-    scoped_cli_args: str,
-    quota_spend_action: str,
-    settlement_chain_ready: bool,
-    command_prefix: str = "loopx",
-    lifecycle_actor_args: str = "",
-    runtime_root: str | None = None,
-    successor_closeout_guard: str | None = None,
-    quota_guard_action: str | None = None,
-) -> list[str]:
-    lifecycle_reentry = project_todo_lifecycle_settlement_reentry(
-        payload,
-        goal_id=goal_id,
-        lifecycle_actor_args=lifecycle_actor_args,
-        scoped_cli_args=scoped_cli_args,
-        runtime_root=runtime_root,
-        quota_guard_action=quota_guard_action,
-    )
-    if lifecycle_reentry is not None:
-        return list(lifecycle_reentry["next_cli_actions"])
-    raw_packet = payload.get("replan_action_packet")
-    packet: Mapping[str, Any] = (
-        raw_packet if isinstance(raw_packet, Mapping) else {}
-    )
-    raw_writeback_contract = packet.get("writeback_contract")
-    writeback_contract: Mapping[str, Any] = (
-        raw_writeback_contract
-        if isinstance(raw_writeback_contract, Mapping)
-        else {}
-    )
-    successor_command = str(
-        writeback_contract.get("successor_command") or ""
-    ).strip()
-    if successor_command:
-        if settlement_chain_ready and successor_closeout_guard:
-            return [
-                "execute replan_action_packet.writeback_contract.successor_command",
-                successor_closeout_guard,
-                "finish only the original Turn's returned settlement actions before ending the heartbeat; "
-                "do not execute or select its successor",
-            ]
-        return [
-            "execute replan_action_packet.writeback_contract.successor_command",
-            "on host_action=end_current_heartbeat: stop",
-        ]
-    raw_obligation = payload.get("autonomous_replan_obligation")
-    obligation: Mapping[str, Any] = (
-        raw_obligation if isinstance(raw_obligation, Mapping) else payload
-    )
-    preferred_input = writeback_contract.get("preferred_input")
-    if preferred_input == "verified_replan_writeback":
-        return [quota_spend_action] if settlement_chain_ready else []
-    semantic_delta_args = (
-        ""
-        if preferred_input == "exact_historical_ack"
-        else writeback_contract.get("cli_semantic_args")
-        or replan_writeback_requirements(obligation)["cli_semantic_args"]
-    )
-    delivery_args = (
-        "--delivery-batch-scale single_surface "
-        "--delivery-outcome outcome_progress "
-        if settlement_chain_ready
-        else ""
-    )
-    cli_prefix = command_prefix.strip() or "loopx"
-    refresh_action = (
-        f"{cli_prefix} --format json refresh-state --goal-id {goal_id} "
-        "--progress-scope agent_lane "
-        "--classification bounded_replan_progress "
-        "--delivery-boundary semantic_closeout "
-        f"{delivery_args}{semantic_delta_args}"
-        f"{settlement_args}{scoped_cli_args}"
-    )
-    if not settlement_chain_ready:
-        return [refresh_action]
-    return [refresh_action, quota_spend_action]
-
-
-def ensure_replan_novelty_policy(
-    obligation: dict[str, Any],
-) -> dict[str, Any]:
-    """Upgrade any legacy obligation onto the policy-owned evidence path."""
-
-    normalized = dict(obligation)
-    if (
-        normalized.get("resolution_mode")
-        == TODO_LIFECYCLE_SETTLEMENT_RESOLUTION_MODE
-    ):
-        normalized["recommended_action"] = str(
-            normalized.get("recommended_action")
-            or "settle the exact completed Todo lifecycle"
-        ).strip()
-        normalized["replan_novelty_policy"] = {
-            **build_replan_novelty_policy(),
-            "writeback": "todo_lifecycle_or_typed_successor",
-        }
-    else:
-        normalized["recommended_action"] = with_replan_novelty_guidance(
-            str(normalized.get("recommended_action") or "run a bounded autonomous replan")
-        )
-        normalized["replan_novelty_policy"] = build_replan_novelty_policy()
-    rearmed_after_obligation_id = normalize_todo_replan_obligation_id(
-        normalized.get("rearmed_after_obligation_id")
-    )
-    if rearmed_after_obligation_id:
-        normalized["rearmed_after_obligation_id"] = rearmed_after_obligation_id
-    else:
-        normalized.pop("rearmed_after_obligation_id", None)
-    trigger_identity = [
-        {
-            key: (
-                trigger.get("obligation_identity_revision", trigger.get(key))
-                if key == "frontier_revision" else trigger.get(key)
-            )
-            for key in (
-                "kind",
-                "frontier_identity",
-                "frontier_revision",
-                "monitor_target_id",
-                "progress_fingerprint",
-                "agent_id",
-                *(("todo_id", "completion_turn_key") if trigger.get("kind") == "completed_advancement_without_successor" else ()),
-                *(
-                    ("latest_generated_at", "oldest_counted_generated_at")
-                    if trigger.get("kind")
-                    in {"periodic_review", "periodic_review_due"}
-                    else ()
-                ),
-            )
-            if trigger.get(key) is not None
-        }
-        for trigger in normalized.get("triggers") or []
-        if isinstance(trigger, dict)
-    ]
-    identity_payload = {
-        "schema_version": normalized.get("schema_version"),
-        "agent_id": normalized.get("agent_id"),
-        "frontier_identity": normalized.get("frontier_identity"),
-        "rearmed_after_obligation_id": rearmed_after_obligation_id,
-        "trigger_identity": trigger_identity,
-    }
-    normalized["obligation_id"] = "replan-" + hashlib.sha256(
-        json.dumps(
-            identity_payload,
-            sort_keys=True,
-            ensure_ascii=True,
-            default=str,
-        ).encode("utf-8")
-    ).hexdigest()[:16]
-    # The pre-stable acceptance checkpoint included the current Todo timestamp.
-    # Derive its exact original obligation from the same canonical trigger set.
-    # This preserves an already-admitted Turn only while its owner/source still
-    # matches; it does not mint an alternative identity for a fresh admission.
-    legacy_revisions = {
-        (trigger.get("kind"), trigger.get("frontier_revision")): trigger["legacy_frontier_revision"]
-        for trigger in normalized.get("triggers") or []
-        if isinstance(trigger, dict)
-        and trigger.get("kind") in {"goal_acceptance_stale", "goal_acceptance_unbound"}
-        and isinstance(trigger.get("legacy_frontier_revision"), str)
-    }
-    if legacy_revisions:
-        legacy_identity = [
-            {**trigger, "frontier_revision": legacy_revisions.get(
-                (trigger.get("kind"), trigger.get("frontier_revision")), trigger.get("frontier_revision"),
-            )} if "frontier_revision" in trigger else trigger
-            for trigger in trigger_identity
-        ]
-        normalized["legacy_obligation_id"] = "replan-" + hashlib.sha256(json.dumps(
-            {**identity_payload, "trigger_identity": legacy_identity},
-            sort_keys=True, ensure_ascii=True, default=str,
-        ).encode("utf-8")).hexdigest()[:16]
-    else:
-        normalized.pop("legacy_obligation_id", None)
-    return normalized
-
-
-# Unchanged-poll streak before a monitor-only lane is forced to replan. Kept
-# deliberately above the 2-turn run-history stall threshold: quiet monitors
-# legitimately wait several cadence cycles for external evidence, and forcing
-# replan after two unchanged polls creates churn for slow external sources.
-MONITOR_NO_CHANGE_STREAK_THRESHOLD = 5
-def _single_public_agent_id(items: list[dict[str, Any]]) -> str | None:
+def _single_public_agent_id(items: Sequence[PayloadView]) -> str | None:
     agent_ids = {
-        str(item.get("agent_id") or "").strip()
+        text
         for item in items
-        if isinstance(item, dict) and str(item.get("agent_id") or "").strip()
+        if isinstance(item, Mapping) and (text := str(item.get("agent_id") or "").strip())
     }
     return next(iter(agent_ids)) if len(agent_ids) == 1 else None
 
 
-def run_history_agent_id(run: Mapping[str, Any]) -> str | None:
+def run_history_agent_id(run: PayloadView) -> str | None:
     agent_id = str(run.get("agent_id") or "").strip()
     if agent_id:
         return agent_id
     monitor_target = run_history_monitor_target(run)
-    if isinstance(monitor_target, dict):
+    if isinstance(monitor_target, Mapping):
         return str(monitor_target.get("agent_id") or "").strip() or None
     return None
 
 
 def _external_review_agent_runs(
-    latest_runs: list[dict[str, Any]] | None,
+    latest_runs: Sequence[PayloadView] | None,
     *,
-    neutral_classifications: set[str],
+    neutral_classifications: AbstractSet[str],
     agent_id: str | None,
-) -> list[dict[str, Any]]:
+) -> list[Payload]:
     """Scope receipt joins to the same newest attributable lane as history."""
 
-    accountable_agent_id = str(agent_id or "").strip() or next(
-        (
-            run_history_agent_id(run)
-            for run in latest_runs or []
-            if isinstance(run, dict)
-            and str(run.get("classification") or "").strip()
-            not in neutral_classifications
-            and run_history_agent_id(run)
-        ),
-        None,
-    )
+    runs = latest_runs or ()
+    accountable_agent_id = str(agent_id or "").strip()
+    if not accountable_agent_id:
+        for run in runs:
+            if not isinstance(run, Mapping):
+                continue
+            if str(run.get("classification") or "").strip() in neutral_classifications:
+                continue
+            if candidate := run_history_agent_id(run):
+                accountable_agent_id = candidate
+                break
     return [
-        run
-        for run in latest_runs or []
-        if isinstance(run, dict)
+        cast(Payload, run) if isinstance(run, dict) else dict(run)
+        for run in runs
+        if isinstance(run, Mapping)
         and (not accountable_agent_id or run_history_agent_id(run) in {None, accountable_agent_id})
     ]
 
 
-def run_history_monitor_target(run: Mapping[str, Any]) -> dict[str, Any] | None:
+def run_history_monitor_target(run: PayloadView) -> Payload | None:
     target = run.get("monitor_target")
-    if isinstance(target, dict):
-        return target
+    if isinstance(target, Mapping):
+        return cast(Payload, target) if isinstance(target, dict) else dict(target)
     event = run.get("monitor_event")
-    if isinstance(event, dict) and isinstance(event.get("monitor_target"), dict):
-        return event.get("monitor_target")
+    if isinstance(event, Mapping):
+        nested = event.get("monitor_target")
+        if isinstance(nested, Mapping):
+            return cast(Payload, nested) if isinstance(nested, dict) else dict(nested)
     return None
 
 
 def run_history_monitor_wait_already_acknowledged(
-    latest_runs: list[dict[str, Any]] | None,
+    latest_runs: Sequence[PayloadView] | None,
     *,
     signal_count: int,
     autonomous_replan_ack_recorded: AckRecorded,
-    neutral_classifications: set[str],
+    neutral_classifications: AbstractSet[str],
 ) -> bool:
     """Return true when newer monitor-poll stalls already have a compact ack run behind them."""
 
-    for run in (latest_runs or [])[signal_count:]:
-        if not isinstance(run, dict):
+    runs = list(latest_runs or ())
+    for run in runs[signal_count:]:
+        if not isinstance(run, Mapping):
             continue
-        if autonomous_replan_ack_recorded(run):
+        run_dict = cast(Payload, run) if isinstance(run, dict) else dict(run)
+        if autonomous_replan_ack_recorded(run_dict):
             return True
         classification = str(run.get("classification") or "").strip()
-        if not classification:
-            continue
-        if classification in neutral_classifications:
+        if not classification or classification in neutral_classifications:
             continue
         if classification == "quota_monitor_poll":
             continue
@@ -390,281 +120,115 @@ def run_history_monitor_wait_already_acknowledged(
 
 
 def autonomous_replan_periodic_review_from_runs(
-    latest_runs: list[dict[str, Any]] | None,
+    latest_runs: Sequence[PayloadView] | None,
     *,
-    agent_todos: dict[str, Any] | None,
+    agent_todos: PayloadView | None,
     autonomous_replan_ack_recorded: AckRecorded,
-    neutral_classifications: set[str],
+    neutral_classifications: AbstractSet[str],
     periodic_run_threshold: int,
-    build_autonomous_replan_obligation: Callable[..., dict[str, Any] | None],
-) -> dict[str, Any] | None:
+    build_autonomous_replan_obligation: Callable[..., Payload | None],
+) -> Payload | None:
+    neutral_set = (
+        neutral_classifications
+        if isinstance(neutral_classifications, set)
+        else set(neutral_classifications)
+    )
     trigger = project_replan_history(
-        latest_runs or [], operation="periodic",
+        latest_runs or (),
+        operation="periodic",
         ack_recorded=autonomous_replan_ack_recorded,
-        neutral_classifications=neutral_classifications,
+        neutral_classifications=neutral_set,
         periodic_threshold=periodic_run_threshold,
     )
-    return (build_autonomous_replan_obligation([trigger], agent_todos=agent_todos)
-            if trigger else None)
+    return (
+        build_autonomous_replan_obligation([trigger], agent_todos=agent_todos)
+        if trigger
+        else None
+    )
 
 
 def build_autonomous_replan_obligation(
-    evidence: list[dict[str, Any]],
+    evidence: Sequence[PayloadView],
     *,
-    agent_todos: dict[str, Any] | None,
+    agent_todos: PayloadView | None,
     public_safe_compact_text: PublicSafeText,
     autonomous_replan_schema_version: str,
     autonomous_replan_stall_threshold: int,
     dead_monitor_repeat_threshold: int,
     dead_monitor_repeat_schema_version: str,
-) -> dict[str, Any] | None:
-    if not evidence:
+) -> Payload | None:
+    resolved_evidence: Sequence[PayloadView] = evidence
+    if not resolved_evidence:
         monitor_evidence = project_replan_history(
-            operation="monitor_streak", agent_todos=agent_todos,
+            operation="monitor_streak",
+            agent_todos=agent_todos,
             streak_threshold=MONITOR_NO_CHANGE_STREAK_THRESHOLD,
             monitor_schema=dead_monitor_repeat_schema_version,
         )
         if monitor_evidence:
-            evidence = [monitor_evidence]
-    if not evidence:
+            resolved_evidence = [monitor_evidence]
+    if not resolved_evidence:
         return None
 
-    dead_monitor_evidence = next(
-        (
-            item
-            for item in evidence
-            if item.get("kind") in {"dead_monitor_repeat", "monitor_no_change_streak"}
-        ),
-        None,
-    )
-    blocked_successor_evidence = next(
-        (
-            item
-            for item in evidence
-            if item.get("kind") == "blocked_successor_no_progress_repeat"
-        ),
-        None,
-    )
-    review_evidence = next(
-        (
-            item
-            for item in evidence
-            if item.get("kind") == EXTERNAL_PROGRESS_REVIEW_TRIGGER_KIND
-        ),
-        None,
-    )
-    first_open: dict[str, Any] = {}
-    if isinstance(agent_todos, dict):
+    summary = summarize_trigger_evidence(resolved_evidence)
+    first_open: PayloadView = {}
+    if isinstance(agent_todos, Mapping):
         open_items = agent_todos.get("first_open_items")
-        if isinstance(open_items, list) and open_items and isinstance(open_items[0], dict):
+        if isinstance(open_items, list) and open_items and isinstance(open_items[0], Mapping):
             first_open = open_items[0]
 
-    evidence_has_agent_attribution = any("agent_id" in item for item in evidence)
-    replan_agent_id = _single_public_agent_id(evidence)
-    if replan_agent_id is None and not evidence_has_agent_attribution:
+    replan_agent_id = (
+        next(iter(summary.agent_ids)) if len(summary.agent_ids) == 1 else None
+    )
+    if replan_agent_id is None and not summary.has_agent_attribution:
         replan_agent_id = str(first_open.get("claimed_by") or "").strip() or None
 
-    todo_actions: list[dict[str, Any]] = []
-    first_open_text = public_safe_compact_text(first_open.get("text"), limit=140)
-    if first_open_text:
-        action: dict[str, Any] = {
-            "action": "split",
-            "role": "agent",
-            "text": first_open_text,
-        }
-        if first_open.get("priority"):
-            action["priority"] = first_open.get("priority")
-        todo_actions.append(action)
-    if blocked_successor_evidence:
-        todo_actions.append(
-            {
-                "action": "add",
-                "role": "agent",
-                "priority": "P1",
-                "text": (
-                    "discover and promote one safe in-scope evidence-backed successor; "
-                    "otherwise record a new evidence-backed blocker or bounded terminal"
-                ),
-            }
-        )
-    elif dead_monitor_evidence:
-        todo_actions.append(
-            {
-                "action": "add",
-                "role": "agent",
-                "priority": "P1",
-                "text": (
-                    "resolve the repeated monitor target with watch-lane expiry, "
-                    "a concrete blocker, todo supersede, or successor runnable todo"
-                ),
-            }
-        )
-    elif review_evidence:
-        todo_actions.append(
-            {
-                "action": "add",
-                "role": "agent",
-                "priority": "P1",
-                "text": (
-                    "select a slice whose next change serves a named acceptance "
-                    "criterion or adds evidence about it, or record with evidence why "
-                    "the current slice is a necessary prerequisite or why the plan "
-                    "stands; renamed, reordered or restated material and self-declared "
-                    "advancement are not progress"
-                ),
-            }
-        )
-    else:
-        todo_actions.append(
-            {
-                "action": "add",
-                "role": "agent",
-                "priority": "P1",
-                "text": (
-                    "write a compact replan record naming trigger, selected next slice, "
-                    "validation command, and stop condition"
-                ),
-            }
-        )
-    if any(item.get("kind") in {"no_progress_streak", "repeated_action_loop"} for item in evidence):
-        todo_actions.append(
-            {
-                "action": "retire",
-                "role": "agent",
-                "priority": "P2",
-                "text": "retire or downgrade stale monitor-only next actions after the executable replan is selected",
-            }
-        )
-    if any(item.get("kind") in {"periodic_review", "periodic_review_due"} for item in evidence):
-        todo_actions.append(
-            {
-                "action": "ask_decision",
-                "role": "user",
-                "priority": "P2",
-                "text": (
-                    "ask the operator only if the review changes authorized goal scope, public claims, "
-                    "resource budget, or protected scope"
-                ),
-            }
-        )
-
-    if blocked_successor_evidence:
-        recommended_action = (
-            "run a bounded autonomous replan for the exact blocked successor: "
-            "promote one safe in-scope evidence-backed successor when available; "
-            "otherwise record a new evidence-backed blocker or coverage-backed terminal"
-        )
-    elif dead_monitor_evidence:
-        recommended_action = (
-            "resolve a dead monitor loop with a new evidence-backed blocker, todo "
-            "supersede, runnable successor, or coverage-backed terminal before another "
-            "quiet monitor poll"
-        )
-    elif review_evidence:
-        recommended_action = (
-            "run a bounded autonomous replan: the last "
-            f"{int(review_evidence.get('run_count') or 0)} observed changes were judged "
-            "not to serve an acceptance criterion or add evidence about one; name the "
-            "criterion the next slice serves and how it will be validated, or keep the "
-            "plan with a typed observation that carries new evidence"
-        )
-    elif any(item.get("kind") in {"periodic_review", "periodic_review_due"} for item in evidence):
-        recommended_action = (
-            "run a bounded autonomous periodic review: keep, split, add, retire, or ask for "
-            "a decision; then update todos and select the next validated slice"
-        )
-    else:
-        recommended_action = (
-            "run an autonomous replan after two consecutive stalled turns before another "
-            "monitor-only or repeated action consumes the eligible turn"
-        )
-
-    extra_fields: dict[str, Any] = {}
-    if (
-        blocked_successor_evidence
-        and blocked_successor_evidence.get("frontier_identity")
-    ):
-        extra_fields["frontier_identity"] = blocked_successor_evidence.get(
-            "frontier_identity"
-        )
-    elif dead_monitor_evidence and dead_monitor_evidence.get("monitor_target_id"):
-        extra_fields["frontier_identity"] = dead_monitor_evidence.get(
-            "monitor_target_id"
-        )
-    typed_progress_evidence = next(
-        (
-            item
-            for item in evidence
-            if item.get("kind") == "typed_progress_repeat"
-            and isinstance(item.get("progress_baseline"), dict)
-        ),
-        None,
-    )
-    if typed_progress_evidence:
-        extra_fields["progress_baseline"] = typed_progress_evidence[
-            "progress_baseline"
+    guidance_actions = (
+        ["set_watch_expiry", "write_blocker", "supersede_monitor", "create_successor"]
+        if summary.dead_monitor
+        else [
+            "discover_safe_successor",
+            "create_successor",
+            "write_blocker",
+            "record_coverage_terminal",
         ]
-        extra_fields["frontier_identity"] = (
-            "progress:"
-            + str(typed_progress_evidence.get("progress_fingerprint") or "")
+        if summary.blocked_successor
+        else ["keep", "split", "add", "retire", "ask_decision"]
+    )
+    raw_threshold = (
+        summary.dead_monitor.get("threshold") if summary.dead_monitor else None
+    )
+    stall_threshold = (
+        (
+            int(raw_threshold)
+            if isinstance(raw_threshold, (int, float, str)) and raw_threshold
+            else dead_monitor_repeat_threshold
         )
-    if review_evidence:
-        if review_evidence.get("frontier_identity"):
-            extra_fields["frontier_identity"] = review_evidence["frontier_identity"]
-        # The evaluated window's typed observation is the discharge baseline:
-        # the writeback semantics accept only a genuinely new surface,
-        # hypothesis, probe family, blocker or terminal coverage against it.
-        if isinstance(review_evidence.get("progress_baseline"), dict):
-            extra_fields["progress_baseline"] = review_evidence["progress_baseline"]
-        # Every typed claim made while the obligation formed travels with it, so
-        # the outcome owner can refuse a replay of any of them, not only the newest.
-        if isinstance(review_evidence.get("progress_window"), list):
-            extra_fields["progress_window"] = list(review_evidence["progress_window"])
-        extra_fields["external_progress_review"] = {
-            "schema_version": review_evidence.get("schema_version"),
-            "signal": review_evidence.get("signal"),
-            "run_count": review_evidence.get("run_count"),
-            "threshold": review_evidence.get("threshold"),
-            "evidence_ids": list(review_evidence.get("evidence_ids") or []),
-            "contract_revision": review_evidence.get("contract_revision"),
-            "consecutive_drift": review_evidence.get("consecutive_drift"),
-            "unevaluated_transitions": review_evidence.get("unevaluated_transitions"),
-            "model_authority": "none",
-            "effect": "required_obligation_under_goal_policy",
-        }
+        if summary.dead_monitor
+        else autonomous_replan_stall_threshold
+    )
     result = build_autonomous_replan_obligation_payload(
         schema_version=autonomous_replan_schema_version,
-        stall_threshold=(
-            int(dead_monitor_evidence.get("threshold") or dead_monitor_repeat_threshold)
-            if dead_monitor_evidence
-            else autonomous_replan_stall_threshold
+        stall_threshold=stall_threshold,
+        trigger_count=len(resolved_evidence),
+        triggers=resolved_evidence,
+        guidance_actions=guidance_actions,
+        todo_actions=todo_actions_for_summary(
+            summary,
+            first_open=first_open,
+            public_safe_compact_text=public_safe_compact_text,
         ),
-        trigger_count=len(evidence),
-        triggers=evidence,
-        guidance_actions=(
-            ["set_watch_expiry", "write_blocker", "supersede_monitor", "create_successor"]
-            if dead_monitor_evidence
-            else [
-                "discover_safe_successor",
-                "create_successor",
-                "write_blocker",
-                "record_coverage_terminal",
-            ]
-            if blocked_successor_evidence
-            else ["keep", "split", "add", "retire", "ask_decision"]
-        ),
-        todo_actions=todo_actions[:3],
         stop_condition=AUTONOMOUS_REPLAN_DEFAULT_STOP_CONDITION,
-        recommended_action=recommended_action,
+        recommended_action=recommended_action_for_summary(summary),
         agent_id=replan_agent_id,
-        extra_fields=extra_fields,
+        extra_fields=extra_fields_for_summary(summary),
     )
-    if dead_monitor_evidence:
+    if summary.dead_monitor:
         result["dead_monitor_detector"] = {
             "schema_version": dead_monitor_repeat_schema_version,
-            "monitor_target_id": dead_monitor_evidence.get("monitor_target_id"),
-            "run_count": dead_monitor_evidence.get("run_count"),
-            "threshold": dead_monitor_evidence.get("threshold"),
+            "monitor_target_id": summary.dead_monitor.get("monitor_target_id"),
+            "run_count": summary.dead_monitor.get("run_count"),
+            "threshold": summary.dead_monitor.get("threshold"),
             "required_resolution": [
                 "watch_lane_expiry",
                 "blocker",
@@ -680,24 +244,26 @@ def build_autonomous_replan_obligation_payload(
     schema_version: str,
     stall_threshold: int,
     trigger_count: int,
-    triggers: list[dict[str, Any]],
-    guidance_actions: list[str],
-    todo_actions: list[dict[str, Any]],
+    triggers: Sequence[PayloadView],
+    guidance_actions: Sequence[str],
+    todo_actions: Sequence[PayloadView],
     stop_condition: str,
     recommended_action: str,
     agent_id: str | None = None,
     include_agent_id: bool = False,
     rearmed_after_obligation_id: str | None = None,
-    extra_fields: dict[str, Any] | None = None,
-) -> dict[str, Any]:
-    payload: dict[str, Any] = {
+    extra_fields: PayloadView | None = None,
+) -> Payload:
+    payload: Payload = {
         "schema_version": schema_version,
         "required": True,
         "stall_threshold": stall_threshold,
         "trigger_count": trigger_count,
-        "triggers": triggers,
-        "guidance_actions": guidance_actions,
-        "todo_actions": todo_actions,
+        "triggers": triggers if isinstance(triggers, list) else list(triggers),
+        "guidance_actions": (
+            guidance_actions if isinstance(guidance_actions, list) else list(guidance_actions)
+        ),
+        "todo_actions": todo_actions if isinstance(todo_actions, list) else list(todo_actions),
         "stop_condition": stop_condition,
         "recommended_action": recommended_action,
     }
@@ -711,29 +277,45 @@ def build_autonomous_replan_obligation_payload(
 
 
 def autonomous_replan_obligation_from_runs(
-    latest_runs: list[dict[str, Any]] | None,
+    latest_runs: Sequence[PayloadView] | None,
     *,
-    agent_todos: dict[str, Any] | None,
+    agent_todos: PayloadView | None,
     agent_id: str | None = None,
     autonomous_replan_ack_recorded: AckRecorded,
-    neutral_classifications: set[str],
-    build_autonomous_replan_obligation: Callable[..., dict[str, Any] | None],
+    neutral_classifications: AbstractSet[str],
+    build_autonomous_replan_obligation: Callable[..., Payload | None],
     autonomous_replan_stall_threshold: int,
     dead_monitor_repeat_threshold: int,
     dead_monitor_repeat_schema_version: str,
     periodic_run_threshold: int,
-    external_progress_review: Mapping[str, Any] | None = None,
-    effective_turn_cadence: dict[str, Any] | None = None,
-) -> dict[str, Any] | None:
+    external_progress_review: PayloadView | None = None,
+    effective_turn_cadence: PayloadView | None = None,
+) -> Payload | None:
+    neutral_set = (
+        neutral_classifications
+        if isinstance(neutral_classifications, set)
+        else set(neutral_classifications)
+    )
+    cadence_arg = (
+        None
+        if effective_turn_cadence is None
+        else (
+            cast(Payload, effective_turn_cadence)
+            if isinstance(effective_turn_cadence, dict)
+            else dict(effective_turn_cadence)
+        )
+    )
     trigger = project_replan_history(
-        latest_runs or [], agent_todos=agent_todos, agent_id=agent_id,
+        latest_runs or (),
+        agent_todos=agent_todos,
+        agent_id=agent_id,
         ack_recorded=autonomous_replan_ack_recorded,
-        neutral_classifications=neutral_classifications,
+        neutral_classifications=neutral_set,
         stall_threshold=autonomous_replan_stall_threshold,
         monitor_threshold=dead_monitor_repeat_threshold,
         monitor_schema=dead_monitor_repeat_schema_version,
         periodic_threshold=periodic_run_threshold,
-        effective_turn_cadence=effective_turn_cadence,
+        effective_turn_cadence=cadence_arg,
     )
     if trigger and trigger.get("kind") == "typed_progress_repeat":
         return build_autonomous_replan_obligation([trigger], agent_todos=agent_todos)
@@ -742,23 +324,29 @@ def autonomous_replan_obligation_from_runs(
     # optional receipt source only takes precedence over monitor/periodic review
     # when a pinned assist policy has formed its own obligation.
     if external_progress_review is not None:
+        todos_dict = (
+            None
+            if agent_todos is None
+            else (cast(Payload, agent_todos) if isinstance(agent_todos, dict) else dict(agent_todos))
+        )
         review_obligation = external_progress_review_obligation(
             _external_review_agent_runs(
                 latest_runs,
-                neutral_classifications=neutral_classifications,
+                neutral_classifications=neutral_set,
                 agent_id=agent_id,
             ),
             external_progress_review=external_progress_review,
             agent_id=agent_id,
             ack_recorded=autonomous_replan_ack_recorded,
             build_obligation=build_autonomous_replan_obligation,
-            agent_todos=agent_todos,
-            neutral_classifications=neutral_classifications,
+            agent_todos=todos_dict,
+            neutral_classifications=neutral_set,
         )
         if review_obligation:
             return review_obligation
 
     return (
         build_autonomous_replan_obligation([trigger], agent_todos=agent_todos)
-        if trigger else None
+        if trigger
+        else None
     )

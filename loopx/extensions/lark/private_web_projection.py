@@ -182,19 +182,15 @@ class PrivateUnsupportedMediaHistory:
         revision = summary.get("transcript_revision")
         if not revision or not markers:
             return summary
-        digest = hashlib.sha256(json.dumps(markers, sort_keys=True, ensure_ascii=False,
-                                          separators=(",", ":")).encode("utf-8")).hexdigest()
+        digest = hashlib.sha256(json.dumps(markers, sort_keys=True, ensure_ascii=False, separators=(",", ":")).encode("utf-8")).hexdigest()
         return {**summary, "transcript_revision": f"{revision}.lark.{digest}"}
 
     @staticmethod
     def insert(messages: list[dict[str, Any]], markers: list[dict[str, Any]]) -> list[dict[str, Any]]:
         if not markers:
             return messages
-        # Keep canonical append order and insert presentation rows by original
-        # time before paging. A late insertion must invalidate the old prefix.
         ids = {row.get("message_id") for row in messages}
-        pending = [(_history_timestamp(row["created_at"]), row) for row in reversed(markers)
-                   if row["message_id"] not in ids]
+        pending = [(_history_timestamp(row["created_at"]), row) for row in reversed(markers) if row["message_id"] not in ids]
         projected = []
         for message in messages:
             try:
@@ -204,7 +200,13 @@ class PrivateUnsupportedMediaHistory:
             while pending and stamp is not None and pending[-1][0] < stamp:
                 projected.append(pending.pop()[1])
             projected.append(message)
-        return projected + [row[1] for row in reversed(pending)]
+        merged = projected + [row[1] for row in reversed(pending)]
+        journal_sha = getattr(messages, "journal_sha256", None)
+        if not isinstance(journal_sha, bytes):
+            return merged
+        from ...chat.journal import CachedJournalRows
+        raw_markers = json.dumps(markers, sort_keys=True, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+        return CachedJournalRows(merged, journal_sha256=journal_sha, markers_sha256=hashlib.sha256(raw_markers).digest())
 
 
 class PrivateWebProjectionMixin:
@@ -299,8 +301,13 @@ class PrivateWebProjectionMixin:
                         or not turn.get("completed_at") or turn.get("error") != message.get("text") or message.get("attachments")):
                     continue
                 failed_turns.add(turn_id)
+                phase_events = (
+                    store.events_after(session_id, turn_id, None)
+                    if turn.get("error_code") in {"host_gate", "response_timeout", "resume_failed"} else []
+                )
                 failure = ("服务在处理此请求时重启，本轮未完成。详情可在 App 的原会话查看。"
-                           if turn.get("error_code") == "server_restarted" else manager_failure_reply(turn)[1])
+                           if turn.get("error_code") == "server_restarted"
+                           else manager_failure_reply(turn, phase_events=phase_events)[1])
                 message = {**message, "text": f"App 执行记录（{turn['completed_at']}）\n\n{failure}"}
             elif verify_turns and not same_turn:
                 raise ValueError("canonical App input identity changed")

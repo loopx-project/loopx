@@ -134,7 +134,7 @@ LoopX 的权威与决策基座（`AuthorityStore`、`CAS`、`claim/lease`、`Tur
 |---|---|---|---|
 | **Level 1 · `BoundaryCLI`** | 进程边界隔离的外部 CLI 宿主（`codex-cli`、`claude-code`、`opencode`、`pi`、`zcode`、`kiro-cli`、`kunluncode` 及 skill-facade CLI），LoopX 仅在 Turn 边界接入 | 保持无竞争日常轮次零仪式感（**`Quiet-Turn`**，零每 Turn 必填表单税），在阶段内保持原生 `KeepRaw` 前缀 KV-cache 稳定，并把前缀重定基与精简增量/快照重置推迟到显式静止的 **`EpochReset`** 边界 | [`loopx/host_loop_activation.py`](../../../loopx/host_loop_activation.py)、[`loopx/hosts/skill_facade.py`](../../../loopx/hosts/skill_facade.py)、`context_delivery.ts`（[历史工作集策略](history-working-set-context-policy-v0.zh-CN.md#51-单一投影-owner)） |
 | **Level 2 · `OrchestratedApp`** | 协调并发 lane 与交接的多单元 App、IDE、IM 及 `Controller–Worker` 编排器 | 强化 **`Subagent Scope`** 隔离（`collaboration_brief_v0`、有界 `remaining_work` 投影、按 worker 隔离的 workspace/lease 围栏与异步唤醒谓词），使长程 worker 执行不阻塞 controller 与用户交互，也不跨切片泄漏父上下文重力 | [`controller-executor-unified-contract-v0.zh-CN.md`](controller-executor-unified-contract-v0.zh-CN.md#router-controller-worker)、[`capable-manager-semantic-handoff-v0.zh-CN.md`](capable-manager-semantic-handoff-v0.zh-CN.md) |
-| **Level 3 · `InTree`** | 运行在 LoopX 进程内或直连进程传输的原生协同宿主（如 DeepSeek Harness 的 `loopx turn run-once --host dsh`） | 把受回执门控的 `FoldToReceipt` / `EpochReset` 队列压缩与回合启动时的确定性上下文/产物预取（**`FoldAndPrefetch`**）及类型化故障恢复（`loopx_turn_host_failure_v0`）融合在同一受控生命周期内 | [`loopx/dsh_goal_mode/turn_host_adapter.py`](../../../loopx/dsh_goal_mode/turn_host_adapter.py)、[`harness-selection-dsh-pi-v0.zh-CN.md`](harness-selection-dsh-pi-v0.zh-CN.md) |
+| **Level 3 · `InTree`** | 运行在 LoopX 进程内或直连进程传输的原生协同宿主（如 DeepSeek Harness 的 `loopx turn run-once --host dsh`） | 把受回执门控的 `FoldToReceipt` / `EpochReset` 队列压缩与回合启动时的确定性上下文/产物预取（**`FoldAndPrefetch`**）及类型化故障恢复（`loopx_turn_host_failure_v0`）融合在同一受控生命周期内 | [`loopx/hosts/dsh/turn_host_adapter.py`](../../../loopx/hosts/dsh/turn_host_adapter.py)、[`harness-selection-dsh-pi-v0.zh-CN.md`](harness-selection-dsh-pi-v0.zh-CN.md) |
 
 为避免各宿主适配器在顶层包中重复复制控制面逻辑：
 
@@ -144,11 +144,11 @@ LoopX 的权威与决策基座（`AuthorityStore`、`CAS`、`claim/lease`、`Tur
   围栏保真度），绝不伪造宿主无法执行的自治承诺或预算强约束。
 - **把 `loopx/*_goal_mode/` 收敛至 `loopx/hosts/`：** 按
   [统一契约的退役门禁](controller-executor-unified-contract-v0.zh-CN.md#3-具名退役清单与棘轮规则)与
-  [`top_level_module_budget.json`](../../../tests/architecture/top_level_module_budget.json)，将现存
-  `9` 个顶层 `loopx/*_goal_mode/` 包（`agy_goal_mode`、`claude_goal_mode`、`dsh_goal_mode`、
-  `kiro_cli_goal_mode`、`kunluncode_goal_mode`、`opencode2_goal_mode`、`opencode_goal_mode`、
-  `pi_goal_mode`、`zcode_goal_mode`）迁入 `loopx/hosts/` 并收敛至共享 `HostHarnessCapabilities`
-  投影，仅在调用方切换完成前保留 CLI 兼容别名。
+  [`top_level_module_budget.json`](../../../tests/architecture/top_level_module_budget.json)，将
+  `9` 个顶层 `loopx/*_goal_mode/` 包迁入 `loopx/hosts/` 并收敛至共享 `HostHarnessCapabilities`
+  投影（已迁入 `6` 个：`hosts/agy`、`hosts/dsh`、`hosts/kiro_cli`、`hosts/opencode`、
+  `hosts/opencode2`、`hosts/pi`；待迁移 `3` 个：`claude_goal_mode`、`kunluncode_goal_mode`、
+  `zcode_goal_mode`），仅在调用方切换完成前保留 CLI 兼容别名。
 - **漏斗验证门禁：** `BoundaryCLI`、`OrchestratedApp` 与 `InTree` 的协同优化（`Quiet-Turn`、
   `EpochReset`、`Subagent Scope`、`FoldAndPrefetch`）在通过[四层漏斗验证协议](long-horizon-harness-benchmark-research-program-v0.zh-CN.md#55-四层漏斗验证协议)前均为架构与设计目标，不直接等同已测收益或默认切换。
 
@@ -560,6 +560,7 @@ Muse 设计页在浏览器超时，其文章通过网页检索读取。本次调
 | [Provider 在效果接受点执行授权（v0）](provider-effect-acceptance-v0.zh-CN.md) | S8/S9，S2/S4 支撑 | 已接受设计；尚未接入 runtime，也未准入 provider | M1：controlled provider 与 deterministic revoke/crash/replay conformance；strict production 接线仍需精确 Goal 生命周期、receipt retention 与独立 provider 资格 |
 | [Research Exploration Control Plane v0](research-exploration-control-plane-v0.zh-CN.md) | S11/S3 | 已接受；M2 composition/successor 局部实现；§11.5 result/adoption 修订为提案 | P1：一条真实 provider result -> 有范围 interpretation -> adopted step/successor，精确 lineage/shared write gate 与 packaged readback；shadow 资格先于 opt-in，保留 composition gap；推断与 M4 portfolio 排序继续 defer |
 | [LoopX × LayerFS 复杂工程探索与效果评测 v0](layerfs-engineering-exploration-evaluation-v0.zh-CN.md) | S4/S8/S11 | 提案；无集成或收益声明 | 有界实验：真实环境 fork/handoff/干净导出，然后匹配预热 worktree 与控制策略进行比较；保留现有研究状态/权限 owner，计入完整成本和负结果；不新增优先级或默认值 |
+| [面向模型与沙箱双中立的快照与分叉 SPI v0](provider-neutral-sandbox-snapshot-fork-spi-v0.zh-CN.md) | S4/S8/S11 | 提案；含 M0 `replay_runtime` 契约一致性测试切片，未接入真实微虚拟机扩展 | 由默认关闭扩展承载 `pause`/`resume`/`snapshot`/`fork`/`destroy` 原语，保持 LoopX 租约/结算权威外置与 `SandboxFidelityTier -> ReplayFidelity` 映射，先过 M1–M3 实机与对照验收 |
 | [Hierarchical Agent Stride Control v0](hierarchical-agent-stride-control-v0.zh-CN.md) | S11/S7 | 已接受；M1 观测及源码层面的 replan 决策接续；自适应策略/恢复接续未资格化 | P2：§7.6 机制/证据范围复盘 -> 真实探针/采用/完整成本；§7.7 同起点接续及恢复验证先于自适应 promotion。保留每 Turn 结算与权限，不按固定小时强制转向、不改变默认 cadence |
 | [Target、Yardstick 与 Stride 联合决策 v0](target-yardstick-stride-decisions-v0.zh-CN.md) | S3/S6/S11 | M1 源码路径、#8382 引用测量 canonical 前缀复用与 #8385 有界 Stride Explore/反转投影已存在；#8441/#8461 预算内规划与三阶段学习边界为提案；数值 fidelity、实际采用与匹配收益（$\Delta J(B \mid s_0) > 0$）未资格化 | P1：保持无变化普通 Turn 零仪式感；复用 Stride/Yardstick owner 做[预算内 EdgeBench pilot](long-horizon-harness-benchmark-research-program-v0.zh-CN.md#edgebench-budgeted-planning)，再验完整预算收益；校准/学习型分配随后依证据推进。M2/M3 保留邻域范围化 fidelity、采用和完整效果/成本资格化，先于推广 |
 | [Goal-scoped Capability Portfolio v0](goal-scoped-capability-portfolio-v0.zh-CN.md) | S1/S3/S6/S8/S11 | 已接受；只读配置/上下文检查切片 | P1：复用既有 owner 验收纠正→新会话决策，再做按需组合与可测方法演化；不建万能记忆库或第二个启用开关 |

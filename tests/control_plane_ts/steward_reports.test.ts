@@ -609,10 +609,14 @@ test("only a proven original pre-execution replan refusal admits one correlated 
   const clearedProbe = {turn: {...source, turn_id: "d".repeat(32), delta_count: 18, upstream_turn_id: "model-turn"},
     journal: validationJournal, inspection: validationInspection, current_guard: clearedGuard};
   assert.equal(admitStewardManagedTurn({...input, report_selection_recovery: {...proof, probe: clearedProbe}}).observation_only, false);
+  const postconditionProbe = {...clearedProbe, journal: {...validationJournal, validation_stage: "task_postcondition"}};
+  assert.equal(admitStewardManagedTurn({...input, report_selection_recovery: {...proof, probe: postconditionProbe}}).observation_only, false);
   for (const badProbe of [
     {...clearedProbe, current_guard: {effective_action: "autonomous_replan_required", replan_action_packet: {obligation_id: "replan-1"}}},
+    {...postconditionProbe, current_guard: {effective_action: "autonomous_replan_required", replan_action_packet: {obligation_id: "replan-1"}}},
     {...clearedProbe, current_guard: {effective_action: "normal_run", replan_action_packet: {obligation_id: "replan-1"}}},
-    {...clearedProbe, journal: {...validationJournal, validation_stage: "task_postcondition"}},
+    {...clearedProbe, journal: {...validationJournal, validation_stage: "settlement_postcondition"}},
+    {...postconditionProbe, journal: {...postconditionProbe.journal, completed_phases: ["host_execute", "typed_result", "validation"]}},
     {...clearedProbe, journal: {...validationJournal, receipt: {...validationJournal.receipt,
       commit_eligibility: {writeback: true, quota_spend: false, scheduler_ack: false}}}},
     {...clearedProbe, inspection: {...validationInspection, recorded_effects: {...inspection.recorded_effects, state_written: true}}},

@@ -17,6 +17,7 @@ from .correction_settlement import (
     TERMINAL_PR_STATES as TERMINAL_PR_STATES,
     _timestamp,
     _upper_label,
+    attach_correction_todo_intent as _attach_correction_todo_intent,
     build_issue_fix_transition_preview as _transition_preview,
     evaluate_issue_fix_maintainer_correction_admission,
     maintainer_correction_transition as _maintainer_correction_transition,
@@ -820,17 +821,9 @@ def build_issue_fix_pr_lifecycle_monitor_packet(
             ):
                 # The entry carries its own Todo intent so a later run can
                 # finish an interrupted write without the original input.
-                maintainer_correction_admission["entries"][0]["todo_intent"] = {
-                    "role": transition["role"],
-                    "text": transition["text"],
-                    "task_class": transition["task_class"],
-                    "action_kind": transition["action_kind"],
-                    "required_write_scopes": (
-                        list(transition.get("required_write_scopes") or [])
-                        if transition["role"] == "agent"
-                        else None
-                    ),
-                }
+                _attach_correction_todo_intent(
+                    maintainer_correction_admission, transition
+                )
     packet: dict[str, Any] = {
         "ok": True,
         "schema_version": ISSUE_FIX_PR_LIFECYCLE_MONITOR_SCHEMA_VERSION,

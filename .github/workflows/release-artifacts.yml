@@ -7,22 +7,17 @@ on:
       - "examples/release-artifacts-smoke.py"
       - "examples/personal-workspace-browser/**"
       - "examples/personal-workspace-browser-smoke.mjs"
-      - "loopx/**"
-      - "package.json"
-      - "package-lock.json"
       - "pyproject.toml"
       - "setup.py"
       - "MANIFEST.in"
-      - "apps/presentation/dashboard/**"
-      - "scripts/chat_bundle.py"
-      - "scripts/verify_installed_chat.py"
-      - "README.md"
       - "scripts/release_artifacts.py"
       - "scripts/runtime_artifact.py"
       - "scripts/qualify_runtime_artifact.py"
-      - "tsconfig.control-plane.json"
   release:
     types: [published]
+  schedule:
+    # Nightly release-artifact and packaged browser verification without publishing assets.
+    - cron: "41 21 * * *"
   workflow_dispatch:
     inputs:
       tag:
@@ -252,6 +247,7 @@ jobs:
               raise SystemExit("browser fixture correction must name a commit")
           allowed = {
               "examples/personal-workspace-browser/fixture.mjs",
+              "examples/personal-workspace-browser/chat-recovery.mjs",
               "examples/personal-workspace-browser/typed-actions.mjs",
               "examples/personal-workspace-browser/goal-work-map.mjs",
               "examples/personal-workspace-browser/goal-workspace-m2.mjs",
@@ -692,7 +688,7 @@ jobs:
           JS
 
       - name: Attest release packages and checksum manifest
-        if: github.event_name != 'pull_request'
+        if: github.event_name == 'release' || github.event_name == 'workflow_dispatch'
         uses: actions/attest@v4
         with:
           subject-path: |
@@ -712,7 +708,7 @@ jobs:
   upload-release:
     if: >-
       !cancelled() && github.repository == 'loopx-project/loopx' &&
-      github.event_name != 'pull_request' &&
+      (github.event_name == 'release' || github.event_name == 'workflow_dispatch') &&
       (needs.build.result == 'success' ||
        (inputs.validated_run_id != '' && needs.build.result == 'skipped'))
     needs: build
@@ -774,7 +770,8 @@ jobs:
 
   publish-pypi:
     if: >-
-      !cancelled() && github.event_name != 'pull_request' &&
+      !cancelled() &&
+      (github.event_name == 'release' || github.event_name == 'workflow_dispatch') &&
       needs.upload-release.result == 'success' &&
       vars.PYPI_PUBLISH_ENABLED == 'true'
     needs: upload-release

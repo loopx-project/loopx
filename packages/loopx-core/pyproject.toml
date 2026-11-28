@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "loopx-core"
-dynamic = ["version"]
+dynamic = ["version", "optional-dependencies"]
 description = "Standalone LoopX CLI and durable task runtime without the workspace."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -17,6 +17,9 @@ loopx = "loopx.entrypoint:main"
 
 [tool.setuptools.dynamic]
 version = {attr = "loopx.__version__"}
+
+[tool.setuptools.dynamic.optional-dependencies]
+standard = {file = "requires-standard.txt"}
 
 [tool.setuptools.packages.find]
 include = ["loopx*"]

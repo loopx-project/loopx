@@ -482,9 +482,10 @@ def qualify_replan_writeback(
         history_runs=newest_first_runs,
         recovering_writeback_path=recovering_writeback_path,
     )
+    raw_outcomes = semantic_delta.get("outcomes")
     if (
-        "coverage_backed_no_followup"
-        in set(semantic_delta.get("outcomes") or [])
+        isinstance(raw_outcomes, (list, tuple, set))
+        and "coverage_backed_no_followup" in raw_outcomes
         and todo_succession_gap_items(agent_todos, agent_id=safe_agent_id)
     ):
         semantic_delta = {

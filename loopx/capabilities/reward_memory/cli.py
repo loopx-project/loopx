@@ -6,7 +6,7 @@ from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import Any, cast
 
-from ..issue_fix.reward_memory import ingest_issue_fix_reward_memory_event
+from ..issue_fix.catalog_entry import ISSUE_FIX_INSTALL_HINT
 from .architecture import (
     build_reward_memory_architecture_packet,
     build_reward_memory_route_packet,
@@ -39,6 +39,18 @@ from .utility_reducer import (
     MEMORY_UTILITY_REDUCER_VERSION,
     reduce_reward_memory_utility_observations,
 )
+
+
+def _ingest_issue_fix_reward_memory_event(*args: Any, **kwargs: Any) -> dict[str, Any]:
+    try:
+        from ..issue_fix.reward_memory import ingest_issue_fix_reward_memory_event
+    except ModuleNotFoundError as exc:
+        if exc.name == "loopx.capabilities.issue_fix.reward_memory":
+            raise ValueError(
+                f"issue_fix_maintainer_feedback requires the optional issue-fix capability. {ISSUE_FIX_INSTALL_HINT}"
+            ) from exc
+        raise
+    return ingest_issue_fix_reward_memory_event(*args, **kwargs)
 
 
 def _render(payload: dict[str, object]) -> str:
@@ -389,7 +401,7 @@ def handle_reward_memory_command(
                 if not isinstance(value, Mapping):
                     raise ValueError(f"{key} must be an object")
             ingest_adapter = {
-                "issue_fix_maintainer_feedback": ingest_issue_fix_reward_memory_event,
+                "issue_fix_maintainer_feedback": _ingest_issue_fix_reward_memory_event,
                 SCOPED_FEEDBACK_ADAPTER: ingest_scoped_feedback_reward_memory_event,
             }.get(str(adapter or ""))
             if ingest_adapter is None:

@@ -98,6 +98,8 @@ class ChatQueueRequestMixin:
             self._send_error("chat session was not found", status=404)
         except ValueError as exc:
             self._send_error(str(exc), status=400)
+        except (BrokenPipeError, ConnectionResetError):
+            return
         except (OSError, RuntimeError):
             self._send_error("Queued messages are temporarily unavailable", status=503)
 

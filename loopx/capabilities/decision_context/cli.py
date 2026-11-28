@@ -121,8 +121,16 @@ def register_decision_context_commands(
         add_subcommand_format(capture)
         capture.add_argument("--goal-id", required=True)
         capture.add_argument("--agent-id", required=True)
-        capture.add_argument("--profile", required=True)
-        capture.add_argument("--spool", required=True)
+        capture.add_argument(
+            "--profile",
+            required=name != "capture-status",
+            help="Private local profile (optional for capture-status when a hook binding is active).",
+        )
+        capture.add_argument(
+            "--spool",
+            required=name != "capture-status",
+            help="Private SQLite spool (optional for capture-status when a hook binding is active).",
+        )
         capture.add_argument("--cursor-state")
         if name == "capture":
             capture.add_argument("--execute", action="store_true")
@@ -132,6 +140,9 @@ def register_decision_context_commands(
             capture.add_argument("--rebase-json", required=True)
             capture.add_argument("--pending-settlement", required=True)
             capture.add_argument("--execute", action="store_true")
+    from .turn_start_hook import register_decision_context_hook_commands
+
+    register_decision_context_hook_commands(commands, add_subcommand_format)
     architecture = commands.add_parser(
         "architecture",
         help="Render the default-off Stage-0 Decision Context contract.",
@@ -146,7 +157,7 @@ def register_decision_context_commands(
     status.add_argument("--agent-id", required=True)
     status.add_argument(
         "--profile",
-        help="Private local profile. Omit it to prove the default-off route.",
+        help="Private local profile. Omit it to prove the default-off route or inspect a bound hook profile.",
     )
 
     manifest = commands.add_parser(
@@ -156,7 +167,10 @@ def register_decision_context_commands(
     add_subcommand_format(manifest)
     manifest.add_argument("--goal-id", required=True)
     manifest.add_argument("--agent-id", required=True)
-    manifest.add_argument("--profile", required=True)
+    manifest.add_argument(
+        "--profile",
+        help="Private local profile (optional when an active hook binding exists).",
+    )
     manifest.add_argument(
         "--observed-at",
         help="Optional timezone-aware ISO-8601 time for a reproducible manifest.",
@@ -171,7 +185,10 @@ def register_decision_context_commands(
     add_subcommand_format(prepare)
     prepare.add_argument("--goal-id", required=True)
     prepare.add_argument("--agent-id", required=True)
-    prepare.add_argument("--profile", required=True)
+    prepare.add_argument(
+        "--profile",
+        help="Private local profile (optional when an active hook binding exists).",
+    )
     prepare.add_argument("--decision-id", required=True)
     prepare.add_argument(
         "--cursor-state",
@@ -208,7 +225,10 @@ def register_decision_context_commands(
     add_subcommand_format(recall)
     recall.add_argument("--goal-id", required=True)
     recall.add_argument("--agent-id", required=True)
-    recall.add_argument("--profile", required=True)
+    recall.add_argument(
+        "--profile",
+        help="Private local profile (optional when an active hook binding exists).",
+    )
     recall.add_argument("--context-scope-ref", required=True)
     recall.add_argument("--query", required=True)
     recall.add_argument("--query-summary", required=True)
@@ -275,15 +295,95 @@ def register_decision_context_commands(
     )
 
 
+def _bound_locators_for_args(
+    args: argparse.Namespace,
+    *,
+    registry_path: Path | None,
+    runtime_root: Path | None,
+) -> dict[str, object] | None:
+    goal_id = str(getattr(args, "goal_id", None) or "").strip()
+    agent_id = str(getattr(args, "agent_id", None) or "").strip()
+    if not goal_id or not agent_id:
+        return None
+    from .turn_start_hook import resolve_bound_decision_context_locators
+
+    return resolve_bound_decision_context_locators(
+        registry_path=registry_path,
+        runtime_root=runtime_root,
+        goal_id=goal_id,
+        agent_id=agent_id,
+    )
+
+
+def _resolved_profile_path(
+    args: argparse.Namespace,
+    *,
+    bound: dict[str, object] | None,
+    required: bool,
+) -> Path | None:
+    explicit = str(getattr(args, "profile", None) or "").strip()
+    if explicit:
+        return Path(explicit)
+    if bound and str(bound.get("profile_path") or "").strip():
+        return Path(str(bound["profile_path"]))
+    if required:
+        raise ValueError(
+            "--profile is required when no active Decision Context hook binding exists"
+        )
+    return None
+
+
 def handle_decision_context_command(
     args: argparse.Namespace,
     *,
     runtime_root: Path | None,
+    registry_path: Path | None = None,
     output_format: FormatSelector,
     print_payload: PrintPayload,
 ) -> int | None:
     if args.command != "decision-context":
         return None
+    if args.decision_context_command == "hook":
+        if registry_path is None or runtime_root is None:
+            raise ValueError("decision-context hook requires registry and runtime_root")
+        from ...control_plane.effect_runtime import (
+            EffectRuntimeRemoteError,
+            EffectRuntimeStartupError,
+        )
+        from .turn_start_hook import (
+            handle_decision_context_hook,
+            render_decision_context_hook,
+        )
+
+        try:
+            payload = handle_decision_context_hook(
+                args,
+                registry_path=registry_path,
+                runtime_root=runtime_root,
+            )
+        except (
+            ValueError,
+            TypeError,
+            OSError,
+            EffectRuntimeRemoteError,
+            EffectRuntimeStartupError,
+        ) as exc:
+            payload = {
+                "ok": False,
+                "schema_version": "decision_context_hook_error_v0",
+                "status": "invalid_request",
+                "error": str(exc),
+            }
+            print_payload(payload, output_format(args), render_decision_context_hook)
+            return 2
+        print_payload(payload, output_format(args), render_decision_context_hook)
+        return 0 if payload.get("ok") else 2
+
+    bound = _bound_locators_for_args(
+        args,
+        registry_path=registry_path,
+        runtime_root=runtime_root,
+    )
     if args.decision_context_command in {"capture-diagnose", "capture-recovery"}:
         from .capture_recovery import diagnose_capture_source, recover_capture_source
 
@@ -315,12 +415,28 @@ def handle_decision_context_command(
             assemble_captured_decision_evidence,
         )
 
+        profile_path = _resolved_profile_path(args, bound=bound, required=True)
+        assert profile_path is not None
+        explicit_spool = str(getattr(args, "spool", None) or "").strip()
+        spool_value = explicit_spool or (
+            str(bound.get("spool_path") or "").strip() if bound else ""
+        )
+        if not spool_value:
+            raise ValueError(
+                "--spool is required when no active hook spool binding exists"
+            )
+        explicit_cursor = str(getattr(args, "cursor_state", None) or "").strip()
+        cursor_value = explicit_cursor or (
+            str(bound.get("cursor_state_path") or "").strip()
+            if bound and not explicit_spool and not getattr(args, "profile", None)
+            else ""
+        )
         capture_args = dict(
             goal_id=args.goal_id,
             agent_id=args.agent_id,
-            profile_path=Path(args.profile),
-            spool_path=Path(args.spool),
-            cursor_path=Path(args.cursor_state) if args.cursor_state else None,
+            profile_path=profile_path,
+            spool_path=Path(spool_value),
+            cursor_path=Path(cursor_value) if cursor_value else None,
         )
         if args.decision_context_command == "prepare-captured":
             records = decision_evidence_records_from_mapping(
@@ -350,6 +466,7 @@ def handle_decision_context_command(
     elif args.decision_context_command == "architecture":
         payload = build_decision_context_architecture_packet()
     elif args.decision_context_command == "recall-context":
+        profile_path = _resolved_profile_path(args, bound=bound, required=True)
         observed_at = (
             str(getattr(args, "observed_at", None) or "").strip()
             or datetime.now(timezone.utc).isoformat()
@@ -357,7 +474,7 @@ def handle_decision_context_command(
         payload = recall_profile_decision_context(
             goal_id=args.goal_id,
             agent_id=args.agent_id,
-            profile_path=Path(args.profile),
+            profile_path=profile_path,
             context_scope_ref=args.context_scope_ref,
             query=args.query,
             query_summary=args.query_summary,
@@ -371,6 +488,17 @@ def handle_decision_context_command(
         observed_at = str(getattr(args, "observed_at", None) or "").strip() or now
         before = str(getattr(args, "before", None) or "").strip() or observed_at
         prepare_review = args.decision_context_command == "prepare-review"
+        profile_path = _resolved_profile_path(
+            args,
+            bound=None if prepare_review else bound,
+            required=True,
+        )
+        explicit_cursor = str(getattr(args, "cursor_state", None) or "").strip()
+        cursor_value = explicit_cursor or (
+            str(bound.get("cursor_state_path") or "").strip()
+            if (not prepare_review and bound and not getattr(args, "profile", None))
+            else ""
+        )
         records = (
             decision_evidence_records_from_mapping(
                 _load_json_mapping(args.rebase_json, label="rebase JSON")
@@ -381,15 +509,11 @@ def handle_decision_context_command(
         activation, assembly = assemble_profile_decision_evidence(
             goal_id=args.goal_id,
             agent_id=args.agent_id,
-            profile_path=Path(args.profile),
+            profile_path=profile_path,
             decision_id=args.decision_id,
             observed_at=observed_at,
             before=before,
-            cursor_path=(
-                Path(args.cursor_state)
-                if str(getattr(args, "cursor_state", None) or "").strip()
-                else None
-            ),
+            cursor_path=Path(cursor_value) if cursor_value else None,
             source_ids=(
                 tuple(args.source_id)
                 if getattr(args, "source_id", None) is not None
@@ -446,11 +570,15 @@ def handle_decision_context_command(
             execute=bool(args.execute),
         )
     elif args.decision_context_command in {"inspect-profile", "source-manifest"}:
-        profile_value = str(getattr(args, "profile", None) or "").strip()
+        profile_path = _resolved_profile_path(
+            args,
+            bound=bound,
+            required=args.decision_context_command == "source-manifest",
+        )
         status, profile = resolve_decision_context_activation(
             goal_id=args.goal_id,
             agent_id=args.agent_id,
-            profile_path=Path(profile_value) if profile_value else None,
+            profile_path=profile_path,
         )
         if args.decision_context_command == "inspect-profile":
             payload = status

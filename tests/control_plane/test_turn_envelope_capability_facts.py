@@ -179,7 +179,7 @@ def test_captured_vision_contract_preserves_closeout_and_original_observation(
         "        'validation_evidence':['check:profile-targeted-validation'],\n"
         "    })\n"
     )
-    command = [sys.executable, "-m", "loopx.dsh_goal_mode", "--workspace", str(project),
+    command = [sys.executable, "-m", "loopx.hosts.dsh", "--workspace", str(project),
                "--dsh-home", str(tmp_path / "host-home"), "--dsh-runner", str(runner)]
     plan = build_loopx_turn_plan(full, host="dsh", execution_mode="isolated-headless",
                                 turn_instance_id="vision-contract-turn")

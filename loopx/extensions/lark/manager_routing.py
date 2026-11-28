@@ -94,7 +94,8 @@ def has_manager_binding(payloads: Mapping[str, Any], target_ref: str) -> bool:
     return any(
         item.get("enabled") is True
         and item.get("target_ref") == target_ref
-        and (item.get("routing") or {}).get("conversation_kind") == "manager"
+        and isinstance((routing := item.get("routing")), Mapping)
+        and routing.get("conversation_kind") == "manager"
         for goal_id, payload in payloads.items()
         if isinstance(payload, Mapping)
         for item in bindings_for_goal(payload, str(goal_id))
@@ -137,10 +138,15 @@ def decide_manager_event(
             )
             if (target.get("channel") or {}).get("chat_id") != chat_id:
                 continue
-            routing = binding.get("routing") or {}
+            raw_routing = binding.get("routing")
+            routing = raw_routing if isinstance(raw_routing, Mapping) else {}
+            raw_topic = binding.get("topic")
+            b_topic = raw_topic if isinstance(raw_topic, Mapping) else {}
+            raw_channel = binding.get("channel")
+            b_channel = raw_channel if isinstance(raw_channel, Mapping) else {}
             topic_root = str(
-                (binding.get("topic") or {}).get("root_message_id")
-                or (binding.get("channel") or {}).get("pinned_message_id")
+                b_topic.get("root_message_id")
+                or b_channel.get("pinned_message_id")
                 or ""
             )
             if routing.get("conversation_kind") != "manager":
@@ -167,9 +173,10 @@ def decide_manager_event(
     if not _valid_manager_binding(goal_id, binding, routing):
         return ignored("invalid_routing_state")
     profile = str(identity.get("sender_profile") or "default")
+    raw_trigger = routing.get("turn_trigger")
     try:
         trigger = conversation_trigger(
-            routing.get("turn_trigger"),
+            raw_trigger if raw_trigger is None or isinstance(raw_trigger, str) else str(raw_trigger),
             addressed=is_event_addressed_to_bot(event, identity),
             bot_message=event.get("sender_type") == "app",
             human=event.get("sender_type") == "user" and bool(event.get("sender_id")),
@@ -212,7 +219,7 @@ def decide_manager_event(
             ),
             "ingress_mode": "session_queue",
             "reply_mode": "topic_reply",
-            "connector": dict(connector),
+            "connector": dict(connector) if isinstance(connector, Mapping) else {},
         },
     }
 
@@ -253,7 +260,8 @@ def authorized_manager_goal_ids(
     targets = snapshot.get("target_payload") or {}
     for goal_id, payload in (snapshot.get("binding_payloads") or {}).items():
         for binding in bindings_for_goal(payload, goal_id):
-            routing = binding.get("routing") or {}
+            raw_routing = binding.get("routing")
+            routing = raw_routing if isinstance(raw_routing, Mapping) else {}
             if (
                 binding.get("enabled") is not True
                 or routing.get("conversation_kind") != "manager"

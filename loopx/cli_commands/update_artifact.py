@@ -28,7 +28,7 @@ from urllib.parse import urlsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 from ..control_plane.content_digest import BARE_SHA256_PATTERN as HASH
-from ..capabilities.issue_fix.repository_snapshot import _REPO_PATTERN as REPOSITORY_PATTERN
+from ..capabilities.issue_fix.github_public import _REPO_PATTERN as REPOSITORY_PATTERN
 
 RUNTIME_ARTIFACT_SCHEMA_VERSION = "loopx_runtime_artifact_v1"
 QUALIFIED_DEFAULT_CONTRACT_FIELD = "qualified_default_contract"
@@ -47,8 +47,8 @@ def standalone_source() -> str:
     for statement, owner_path, symbol, alias in (
         ("from ..control_plane.content_digest import BARE_SHA256_PATTERN as HASH",
          "control_plane/content_digest.py", "BARE_SHA256_PATTERN", "HASH"),
-        ("from ..capabilities.issue_fix.repository_snapshot import _REPO_PATTERN as REPOSITORY_PATTERN",
-         "capabilities/issue_fix/repository_snapshot.py", "_REPO_PATTERN", "REPOSITORY_PATTERN"),
+        ("from ..capabilities.issue_fix.github_public import _REPO_PATTERN as REPOSITORY_PATTERN",
+         "capabilities/issue_fix/github_public.py", "_REPO_PATTERN", "REPOSITORY_PATTERN"),
     ):
         owner = (Path(__file__).resolve().parents[1] / owner_path).read_text(encoding="utf-8")
         assignments = [node for node in ast.parse(owner).body if isinstance(node, ast.Assign)

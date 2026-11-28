@@ -25,9 +25,10 @@ export function registerManagedClaimExecutionConformance(provider: string, facto
     assert.equal((await store.commitAuthority({operation_id: "seed", expected_provider_revision: null,
       next_projection: projection, events: [], receipts: []})).status, "applied");
     const now = new Date("2026-09-13T10:00:00Z");
+    // The expiry and renewal scenarios below use a fixed 45-minute lease.
     const request = {goal_id: "goal-a", todo_id: "todo_managed", claimed_by: "agent-a", actor_agent_id: "agent-a",
       expected_role: "agent", registered_agents: ["agent-a", "agent-b"], operation_id: "claim-a",
-      manage_execution: true, dry_run: false, now};
+      manage_execution: true, ttl_seconds: 45 * 60, dry_run: false, now};
     const progress = {goal_id: request.goal_id, todo_id: request.todo_id, actor_agent_id: "agent-a",
       expected_role: "agent", registered_agents: request.registered_agents, operation_id: "progress-a",
       patch: {note: "Validated progress"}, clear_fields: [], dry_run: false, now,
@@ -389,7 +390,8 @@ export function registerManagedClaimExecutionConformance(provider: string, facto
     assert.equal((await claim(store, {...target,
       now: new Date("2026-09-13T10:44:59Z")})).reason_code, "claim_owner_mismatch");
     assert.equal((await claim(store, {...target, registered_agents: ["agent-a"]})).status, "failed");
-    assert.equal((await claim(store, {...target, manage_execution: false})).reason_code, "claim_owner_mismatch");
+    assert.equal((await claim(store, {...target, manage_execution: false, ttl_seconds: undefined})).reason_code,
+      "claim_owner_mismatch");
     assert.deepEqual(await loaded(store), before);
     const recovery = todoUpdateLeaseRecovery(before.head,
       {...progress, claim_operation_id: undefined, actor_agent_id: "agent-b", now: target.now}, "hard_lease");
@@ -469,7 +471,7 @@ export function registerManagedClaimExecutionConformance(provider: string, facto
   test(`${provider} managed execution: pre-upgrade plain claim recovery never changes its intent`, async t => {
     const {store, request} = await setup(t);
     assert.equal((await claim(store, request)).status, "applied");
-    const legacy = {...request, operation_id: "pre-upgrade-claim", manage_execution: false};
+    const legacy = {...request, operation_id: "pre-upgrade-claim", manage_execution: false, ttl_seconds: undefined};
     assert.equal((await claim(store, legacy)).status, "no_change");
     const before = await loaded(store);
     const recovered = await claim(store, {...legacy, manage_execution: true});
