@@ -342,7 +342,7 @@ def test_advancement_retry_exhaustion_and_lookup_cache_efficiency(tmp_path: Path
 
     precommit_resp: dict[str, object] = {"native_loopx": {"ok": False, "status": "failed",
         "result_kind": "host_failure", "receipt": {"commit_eligibility": {"writeback": False}},
-        "effects": {"state_written": False}}}
+        "effects": {"state_written": False, "quota_spent": False, "scheduler_acknowledged": False}}}
     deferred_resp: dict[str, object] = {"native_loopx": {"ok": False,
         "error_code": "turn_todo_selection_deferred", "selection_rejection": {"state": "deferred"},
         "effects": {"host_invoked": False, "state_written": False,

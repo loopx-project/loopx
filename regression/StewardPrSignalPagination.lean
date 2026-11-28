@@ -2301,6 +2301,59 @@ theorem aborted_repository_poll_can_restage_after_losing_its_reply
 theorem a_reserved_poll_keeps_its_original_snapshot_candidate (old new : Option Nat) :
     canRestageChangedRepository true old new = false := rfl
 
+structure AdvancementEffectEvidence where
+  stateWritten : Option Bool
+  quotaSpent : Option Bool
+  schedulerAcknowledged : Option Bool
+  deriving DecidableEq
+
+def explicitlyNoEffects (facts : AdvancementEffectEvidence) : Bool :=
+  facts.stateWritten == some false && facts.quotaSpent == some false && facts.schedulerAcknowledged == some false
+
+/- Replay flags describe only the current call. Original effects come from
+   the typed journal projection, with null denoting unresolved evidence. -/
+def authorizeAdvancementRetry (current : AdvancementEffectEvidence) (replayed durableEffect : Bool)
+    (original : Option AdvancementEffectEvidence) : Bool :=
+  explicitlyNoEffects current && !durableEffect &&
+    ((!replayed && original.isNone) || original.any explicitlyNoEffects)
+
+theorem missing_effect_evidence_blocks_advancement_retry
+    (written acknowledged : Option Bool) (replayed durableEffect : Bool) (original : Option AdvancementEffectEvidence) :
+    authorizeAdvancementRetry ⟨written, none, acknowledged⟩ replayed durableEffect original = false := by
+  cases written <;> simp [authorizeAdvancementRetry, explicitlyNoEffects]
+
+theorem fresh_zero_effect_evidence_allows_bounded_retry :
+    authorizeAdvancementRetry ⟨some false, some false, some false⟩ false false none = true := rfl
+
+theorem replay_requires_original_turn_effects :
+    authorizeAdvancementRetry ⟨some false, some false, some false⟩ true false none = false := rfl
+
+theorem replay_with_verified_zero_original_effects_can_retry :
+    authorizeAdvancementRetry ⟨some false, some false, some false⟩ true false
+      (some ⟨some false, some false, some false⟩) = true := rfl
+
+theorem original_quota_use_blocks_a_replay_despite_current_zero_effects :
+    authorizeAdvancementRetry ⟨some false, some false, some false⟩ true false
+      (some ⟨some false, some true, some false⟩) = false := rfl
+
+theorem durable_spend_overrides_current_and_original_zero_flags :
+    authorizeAdvancementRetry ⟨some false, some false, some false⟩ true true
+      (some ⟨some false, some false, some false⟩) = false := rfl
+
+def mergeEffectFact (before later : Option Bool) : Option Bool :=
+  match before, later with
+  | some true, _ | _, some true => some true
+  | some false, some false => some false
+  | _, _ => none
+
+theorem merging_unknown_governance_spend_cannot_authorize_retry :
+    authorizeAdvancementRetry ⟨some false, mergeEffectFact (some false) none, some false⟩ false false none =
+      false := rfl
+
+theorem merging_two_proven_zero_governance_results_preserves_retry :
+    let zero := mergeEffectFact (some false) (some false)
+    authorizeAdvancementRetry ⟨zero, zero, zero⟩ false false none = true := rfl
+
 #print axioms complete_has_bounded_terminal
 #print axioms incomplete_keeps_previous
 #print axioms repeated_cursor_is_unavailable
@@ -2557,5 +2610,13 @@ theorem a_reserved_poll_keeps_its_original_snapshot_candidate (old new : Option 
 #print axioms switched_repository_cannot_publish_old_repository_pr_43
 #print axioms aborted_repository_poll_can_restage_after_losing_its_reply
 #print axioms a_reserved_poll_keeps_its_original_snapshot_candidate
+#print axioms missing_effect_evidence_blocks_advancement_retry
+#print axioms fresh_zero_effect_evidence_allows_bounded_retry
+#print axioms replay_requires_original_turn_effects
+#print axioms replay_with_verified_zero_original_effects_can_retry
+#print axioms original_quota_use_blocks_a_replay_despite_current_zero_effects
+#print axioms durable_spend_overrides_current_and_original_zero_flags
+#print axioms merging_unknown_governance_spend_cannot_authorize_retry
+#print axioms merging_two_proven_zero_governance_results_preserves_retry
 
 end StewardPrSignalPagination
