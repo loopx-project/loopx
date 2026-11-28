@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 
 from .core import (
@@ -440,12 +440,6 @@ def _normalize_candidates(raw: object, evaluated_at: str) -> list[dict[str, Any]
     )
 
 
-def _seconds_between(start_at: str, end_at: str) -> int:
-    start = datetime.fromisoformat(start_at.replace("Z", "+00:00"))
-    end = datetime.fromisoformat(end_at.replace("Z", "+00:00"))
-    return max(0, int((end - start).total_seconds()))
-
-
 def build_periodic_report_trigger_decision(
     request: Mapping[str, Any],
 ) -> dict[str, Any]:
@@ -492,9 +486,12 @@ def build_periodic_report_trigger_decision(
     next_eligible_at: str | None = None
     bypass_trigger_id: str | None = None
     if eligible and last_report and policy["minimum_interval_seconds"]:
-        elapsed = _seconds_between(last_report["delivered_at"], evaluated_at)
-        minimum_interval = int(policy["minimum_interval_seconds"])
-        cooldown_active = elapsed < minimum_interval
+        delivered = datetime.fromisoformat(
+            last_report["delivered_at"].replace("Z", "+00:00")
+        )
+        evaluated = datetime.fromisoformat(evaluated_at.replace("Z", "+00:00"))
+        minimum_interval = timedelta(seconds=int(policy["minimum_interval_seconds"]))
+        cooldown_active = evaluated - delivered < minimum_interval
         if cooldown_active:
             bypass = next(
                 (
@@ -507,14 +504,8 @@ def build_periodic_report_trigger_decision(
             if bypass:
                 bypass_trigger_id = str(bypass["trigger_id"])
             else:
-                delivered = datetime.fromisoformat(
-                    str(last_report["delivered_at"]).replace("Z", "+00:00")
-                )
-                next_at = delivered.timestamp() + minimum_interval
                 next_eligible_at = (
-                    datetime.fromtimestamp(next_at, tz=delivered.tzinfo)
-                    .isoformat()
-                    .replace("+00:00", "Z")
+                    (delivered + minimum_interval).isoformat().replace("+00:00", "Z")
                 )
                 for candidate in eligible:
                     suppressed.append(

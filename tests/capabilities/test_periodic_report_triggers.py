@@ -448,6 +448,52 @@ def test_nonurgent_trigger_waits_for_cooldown_and_covered_events_dedupe() -> Non
     assert duplicate["suppressed_triggers"][0]["reason"] == "already_covered"
 
 
+@pytest.mark.parametrize(
+    ("delivered_at", "cutoff"),
+    [
+        pytest.param(
+            "2500-07-20T00:00:00.000001Z", "2500-07-20T00:00:01.000001Z", id="rounded-later"
+        ),
+        pytest.param(
+            "2500-07-20T00:00:00.000012Z", "2500-07-20T00:00:01.000012Z", id="rounded-earlier"
+        ),
+        pytest.param(
+            "9999-12-31T23:59:58.999999Z", "9999-12-31T23:59:59.999999Z", id="maximum-cutoff"
+        ),
+    ],
+)
+@pytest.mark.parametrize("at_cutoff", [False, True], ids=["before", "at"])
+def test_trigger_cli_cooldown_advertises_exact_cutoff(
+    tmp_path, capsys, delivered_at: str, cutoff: str, at_cutoff: bool
+) -> None:
+    from datetime import datetime, timedelta
+
+    request = _trigger_request(_candidate(
+        "cadence_due", source_ref="scheduler:example-window", evidence_digest="sha256:calendar",
+        facts={"due": True}, observed_at=delivered_at,
+    ))
+    policy = request["trigger_policy"]
+    assert isinstance(policy, dict)
+    policy["minimum_interval_seconds"] = 1
+    request["last_report"] = {"delivered_at": delivered_at, "covered_trigger_ids": []}
+    cutoff_time = datetime.fromisoformat(cutoff)
+    request["evaluated_at"] = cutoff if at_cutoff else (
+        cutoff_time - timedelta(microseconds=1)
+    ).isoformat().replace("+00:00", "Z")
+    request_path = tmp_path / "request.json"
+    request_path.write_text(json.dumps(request), encoding="utf-8")
+
+    code = main([
+        "--format", "json", "periodic-report", "evaluate-trigger",
+        "--request-json", str(request_path),
+    ])
+    decision = json.loads(capsys.readouterr().out)
+    assert code == 0, decision
+    assert decision["eligible"] is at_cutoff
+    assert decision["cooldown"]["active"] is (not at_cutoff)
+    assert decision["cooldown"]["next_eligible_at"] == (None if at_cutoff else cutoff)
+
+
 def test_trigger_receipt_participates_in_run_identity_and_cli(tmp_path, capsys) -> None:
     cadence = build_periodic_report_trigger_decision(
         _trigger_request(

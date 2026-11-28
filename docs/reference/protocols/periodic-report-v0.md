@@ -461,7 +461,9 @@ updates, while authorized manual runs, validated primary outcomes, validated
 vision closures, and primary-path blockers may bypass it. The output records
 the selected and coalesced ids, every suppression reason, cooldown state, and
 the report kind (`cadence_digest`, `milestone_update`, `exception_update`, or
-`manual_update`).
+`manual_update`). When cooldown suppresses an otherwise eligible report,
+`next_eligible_at` is the prior delivery time plus `minimum_interval_seconds`,
+with the delivery timestamp's microseconds preserved.
 
 `bounded_segment_milestone` is derived from the same goal-vision and frontier
 facts that drive autonomous replan, but it is a stricter success-path result.
