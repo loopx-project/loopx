@@ -19,6 +19,7 @@ if TYPE_CHECKING:
     )
 
 MONITOR_RECOVERY_RETRY_COOLDOWN_SECONDS = 300
+MONITOR_SIGNAL_SCOPE_CHANGED = "the monitor signal scope changed after observation"
 _WORKER_EXITED_ERROR = (
     "The LoopX Chat execution worker exited before this turn finished. "
     "Your conversation is saved; execution may have occurred. This turn was not retried automatically."
@@ -26,6 +27,7 @@ _WORKER_EXITED_ERROR = (
 _POST_CONTEXT_WATCH_ERRORS = frozenset({
     "steward monitor external signal source temporarily unavailable",
     "the portfolio scope changed after observation",
+    MONITOR_SIGNAL_SCOPE_CHANGED,
     "disk I/O error",
     _WORKER_EXITED_ERROR,
 })

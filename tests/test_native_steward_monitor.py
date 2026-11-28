@@ -1525,6 +1525,139 @@ def test_repository_unavailability_preserves_poll_and_recovery_scope(
     assert spent_slots(monitor, actor) == quota_before
 
 
+@pytest.mark.parametrize("revision", ["changed-during-read", "equivalent-rewrite", "writer-during-commit"])
+def test_signal_monitor_commits_only_under_its_observed_scope(steward, tmp_path, monkeypatch, revision):
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Event
+
+    from test_steward_generic_monitor_todo import _set_signal_source_policy
+    from loopx.capabilities.native_chat.steward_commands import native_command
+    from loopx.capabilities.native_chat.steward_monitor_turns import (
+        read_steward_monitor_scope,
+        steward_monitor_scope_path,
+        steward_monitor_snapshot_path,
+        write_steward_monitor_scope,
+    )
+    from loopx.file_lock import LockAcquireTimeoutError, exclusive_file_lock
+
+    store, runtime, _, transport, binding, _, _ = steward
+    sid, actor, monitor = prepared(steward, tmp_path, monkeypatch, "sqlite")
+    _set_signal_source_policy(runtime, store.load_session(sid), binding,
+                              goal_id=actor["goal_id"], agent_id=actor["agent_id"])
+    edit_local_watch(
+        runtime, actor, monitor.current(actor)["todo_id"], "--next-due-at",
+        (datetime.now(timezone.utc) + timedelta(hours=2)).isoformat(),
+    )
+    target = "steward-filter-ordering-prs"
+    first_due = datetime.now(timezone.utc) - timedelta(seconds=10)
+    added = native_command(runtime, [
+        "todo", "add", "--goal-id", actor["goal_id"], "--role", "agent",
+        "--text", "Monitor scoped pull requests", "--claimed-by", actor["agent_id"],
+        "--task-class", "continuous_monitor", "--action-kind", "local_runtime_observe",
+        "--continuation-policy", "same_agent_non_delivery", "--required-capability", "filesystem",
+        "--target-key", target, "--task-repository", "git:github.com/org/repo", "--watch-only",
+        "--cadence", "30m", "--next-due-at", first_due.isoformat(), "--execute",
+    ])
+    todo_id = added["todo_id"]
+    root, goal_id = runtime.coordination_runtime_root, actor["goal_id"]
+    original_scope = {
+        "schema_version": "steward_signal_monitor_scope_v0", "include_portfolio": False, "include_inbox": False,
+        "pr_filter": {"exclude_drafts": False, "author_mode": "exclude", "authors": ["maintainer"]},
+    }
+    normalized = write_steward_monitor_scope(root, goal_id, target, original_scope)
+    changed_scope = {**original_scope, "pr_filter": {**original_scope["pr_filter"], "exclude_drafts": True}}
+    transport.reconcile()
+
+    def events(turn):
+        return [event for event in store.events_after(turn["session_id"], turn["turn_id"], None)
+                if event["kind"] == "native_loopx.monitor_poll"]
+
+    def observe(items):
+        return {"status": "ok", "repository": "org/repo", "items": items}
+
+    observer = "loopx.capabilities.native_chat.steward_monitor._observe_github_repository_prs"
+    committed_pr = {"number": 42, "isDraft": False, "author": {"login": "contributor"}}
+    monkeypatch.setattr(observer, lambda *_args, **_kwargs: observe([committed_pr]))
+    runtime._steward_monitor_next_check.clear()
+    seeded = finish(runtime, pump_steward_monitors(runtime)[0])
+    assert seeded["status"] == "completed" and len(events(seeded)) == 1
+    snapshot_path = steward_monitor_snapshot_path(root, goal_id, todo_id)
+    prior_snapshot = snapshot_path.read_bytes()
+    edit_local_watch(runtime, actor, todo_id, "--next-due-at", (first_due - timedelta(seconds=1)).isoformat())
+    before = local_watch_row(runtime, actor, todo_id)
+    quota_before = spent_slots(monitor, actor)
+    draft = {"number": 43, "isDraft": True, "author": {"login": "contributor"}}
+    calls = 0
+
+    def read_repository(*_args, **_kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 1 and revision == "changed-during-read":
+            write_steward_monitor_scope(root, goal_id, target, changed_scope)
+        if calls == 1 and revision == "equivalent-rewrite":
+            equivalent = {**original_scope, "pr_filter": {**original_scope["pr_filter"], "authors": ["MAINTAINER", "maintainer"]}}
+            assert write_steward_monitor_scope(root, goal_id, target, equivalent) == normalized
+        return observe([draft])
+
+    monkeypatch.setattr(observer, read_repository)
+    runtime._steward_monitor_next_check.clear()
+    with ThreadPoolExecutor(max_workers=1) as writers:
+        if revision == "writer-during-commit":
+            contended = Event()
+            attempts = []
+            native_poll = StewardMonitor._native_poll
+
+            def edit_scope():
+                path = steward_monitor_scope_path(root, goal_id, target)
+                with pytest.raises(LockAcquireTimeoutError), exclusive_file_lock(path, timeout_seconds=0):
+                    pass
+                contended.set()
+                return write_steward_monitor_scope(root, goal_id, target, changed_scope)
+
+            def poll_with_concurrent_editor(owner, argv):
+                attempts.append(writers.submit(edit_scope))
+                assert contended.wait(5), "scope writer did not observe the commit lock"
+                assert not attempts[0].done()
+                return native_poll(owner, argv)
+
+            monkeypatch.setattr(StewardMonitor, "_native_poll", poll_with_concurrent_editor)
+        turns = pump_steward_monitors(runtime)
+        assert len(turns) == 1 and turns[0]["loopx_request"]["todo_id"] == todo_id
+        first = finish(runtime, turns[0])
+        if revision == "writer-during-commit":
+            assert attempts[0].result(timeout=5)["pr_filter"]["exclude_drafts"] is True
+    assert calls == 1
+
+    if revision == "changed-during-read":
+        assert first["status"] == "failed" and first["error"] == "the monitor signal scope changed after observation"
+        assert not events(first)
+        assert snapshot_path.read_bytes() == prior_snapshot
+        assert not snapshot_path.with_suffix(".pending.json").exists()
+        after_failure = local_watch_row(runtime, actor, todo_id)
+        for field in ("result_hash", "monitor_effect_id", "last_checked_at", "next_due_at", "material_change_generation"):
+            assert after_failure.get(field) == before.get(field)
+        runtime._steward_monitor_next_check.clear()
+        recovery = pump_steward_monitors(runtime)
+        assert len(recovery) == 1
+        assert recovery[0]["loopx_request"]["monitor_restart_recovery"]["original_turn_id"] == first["turn_id"]
+        accepted = finish(runtime, recovery[0])
+        assert calls == 2 and accepted["status"] == "completed" and len(events(accepted)) == 1
+        snapshot = json.loads(snapshot_path.read_bytes())
+        assert snapshot["repository_snapshot"]["items"] == []
+        assert snapshot["signal_scope"] == read_steward_monitor_scope(root, goal_id, target)
+    else:
+        assert first["status"] == "completed" and len(events(first)) == 1
+        snapshot = json.loads(snapshot_path.read_bytes())
+        assert snapshot["repository_snapshot"]["items"] == [draft]
+        assert snapshot["signal_scope"] == normalized
+        if revision == "writer-during-commit":
+            assert read_steward_monitor_scope(root, goal_id, target)["pr_filter"]["exclude_drafts"] is True
+
+    after = local_watch_row(runtime, actor, todo_id)
+    assert after["next_due_at"] != before["next_due_at"] and after["result_hash"] == snapshot["result_hash"]
+    assert spent_slots(monitor, actor) == quota_before
+
+
 @pytest.mark.parametrize(
     ("error_code", "error_message", "fail_before_context"),
     [

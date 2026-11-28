@@ -22,7 +22,7 @@ from .steward_monitor_pump import (
     pump_managed_session_monitors as pump_managed_session_monitors,
     pump_steward_monitors as pump_steward_monitors,
 )
-from .steward_monitor_snapshots import commit_signal_snapshot
+from .steward_monitor_snapshots import commit_signal_snapshot, fence_observed_signal_scope
 from .steward_monitor_signals import (
     SignalMonitorCollection,
     _accepts_backfill_comments as _accepts_backfill_comments,
@@ -284,14 +284,16 @@ class StewardMonitor:
                 raise ValueError("the portfolio scope changed after observation")
             if signal_snapshot is None:
                 return self._native_poll(argv)
-            return commit_signal_snapshot(
-                self.controller.coordination_runtime_root,
-                self.controller.registry_path,
-                signal_snapshot,
-                agent_id=str(actor["agent_id"]),
-                turn_instance_id=str(request["turn_instance_id"]),
-                poll=lambda: self._native_poll(argv),
-            )
+            root = self.controller.coordination_runtime_root
+            with fence_observed_signal_scope(root, signal_snapshot):
+                return commit_signal_snapshot(
+                    root,
+                    self.controller.registry_path,
+                    signal_snapshot,
+                    agent_id=str(actor["agent_id"]),
+                    turn_instance_id=str(request["turn_instance_id"]),
+                    poll=lambda: self._native_poll(argv),
+                )
 
     def _native_poll(self, argv: Sequence[str]) -> dict[str, object]:
         """Use the native poll owner; a Chat observation is no heartbeat task."""

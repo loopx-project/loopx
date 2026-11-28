@@ -13,6 +13,7 @@ from typing import Literal, NoReturn, Protocol, overload
 
 from ...chat_store import ChatSessionStore, _atomic_write_json
 from ...control_plane.effect_runtime import effect_runtime_result
+from ...file_lock import exclusive_file_lock
 
 TARGET = "steward-portfolio-watch"
 FOLLOWUP_TARGET_PREFIX = "steward-monitor-followup:"
@@ -701,8 +702,8 @@ def write_steward_monitor_scope(
     if normalized is None:
         raise ValueError("signal_scope cannot be empty")
     path = steward_monitor_scope_path(runtime_root, goal_id, target_key)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    _atomic_write_json(path, normalized)
+    with exclusive_file_lock(path, operation="write_steward_monitor_scope"):
+        _atomic_write_json(path, normalized)
     return normalized
 
 

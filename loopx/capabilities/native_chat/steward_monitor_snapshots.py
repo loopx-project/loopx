@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterator, Mapping
+from contextlib import contextmanager, nullcontext
 import json
 import logging
 from pathlib import Path
@@ -10,10 +11,34 @@ from pathlib import Path
 from ...chat_store import _atomic_write_json
 from ...control_plane.goals.first_party_host_admission import capture_first_party_host_goal_ref
 from ...control_plane.quota.monitor_poll import QUOTA_MONITOR_POLL_CLASSIFICATION, find_quota_monitor_poll_turn
-from .steward_monitor_turns import _coerce_dict, steward_monitor_snapshot_path
+from ...file_lock import exclusive_file_lock
+from .steward_monitor_turns import (
+    _MONITOR_TARGET_KEY_RE,
+    _coerce_dict,
+    read_steward_monitor_scope,
+    steward_monitor_scope_path,
+    steward_monitor_snapshot_path,
+)
+from .steward_turn_common import MONITOR_SIGNAL_SCOPE_CHANGED
 
 _LOGGER = logging.getLogger(__name__)
 SIGNAL_MONITOR_SNAPSHOT_SCHEMA = "steward_signal_monitor_snapshot_v0"
+
+
+@contextmanager
+def fence_observed_signal_scope(runtime_root: Path, snapshot: Mapping[str, object]) -> Iterator[None]:
+    goal_id = str(snapshot["goal_id"])
+    target_key = str(snapshot.get("target_key") or "")
+    scope_lock = (
+        exclusive_file_lock(
+            steward_monitor_scope_path(runtime_root, goal_id, target_key), operation="commit_steward_monitor_scope",
+        )
+        if _MONITOR_TARGET_KEY_RE.fullmatch(target_key) else nullcontext()
+    )
+    with scope_lock:
+        if read_steward_monitor_scope(runtime_root, goal_id, target_key) != snapshot.get("signal_scope"):
+            raise ValueError(MONITOR_SIGNAL_SCOPE_CHANGED)
+        yield
 
 
 def _read_snapshot(path: Path) -> dict[str, object]:

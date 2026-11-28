@@ -2188,6 +2188,64 @@ theorem uncommitted_pr_43_does_not_replace_committed_pr_42 :
     selectCommittedSnapshot ⟨some previous, some rejected⟩ none = some previous := by
   decide
 
+structure ScopedPollObservation where
+  scope : List Nat
+  prs : List Nat
+  resultHash : Nat
+  checkedAt : Nat
+  nextDue : Nat
+  deriving DecidableEq
+
+structure ScopedPollState where
+  currentScope : List Nat
+  published : ScopedPollObservation
+  polls : Nat
+  deriving DecidableEq
+
+def writeMonitorSignalScope (state : ScopedPollState) (scope : List Nat) : ScopedPollState :=
+  { state with currentScope := scope }
+
+/- A shared lock linearizes the normalized scope write and the check with
+   the durable poll commit. Tokens represent the full normalized scope. -/
+def commitScopedObservation (state : ScopedPollState) (candidate : ScopedPollObservation) : ScopedPollState :=
+  if state.currentScope = candidate.scope then
+    { state with published := candidate, polls := state.polls + 1 }
+  else state
+
+theorem changed_monitor_scope_preserves_poll_snapshot_and_due_time
+    (state : ScopedPollState) (candidate : ScopedPollObservation)
+    (changed : state.currentScope ≠ candidate.scope) :
+    commitScopedObservation state candidate = state := by
+  simp [commitScopedObservation, changed]
+
+theorem equivalent_normalized_scope_allows_the_poll
+    (state : ScopedPollState) (candidate : ScopedPollObservation) (scope : List Nat)
+    (equivalent : scope = state.currentScope) (captured : state.currentScope = candidate.scope) :
+    (commitScopedObservation (writeMonitorSignalScope state scope) candidate).published = candidate := by
+  simp [writeMonitorSignalScope, commitScopedObservation, equivalent, captured]
+
+theorem scope_edit_first_rejects_old_read_and_recovery_commits_once
+    (state : ScopedPollState) (old fresh : ScopedPollObservation)
+    (changed : fresh.scope ≠ old.scope) :
+    let edited := writeMonitorSignalScope state fresh.scope
+    let recovered := commitScopedObservation (commitScopedObservation edited old) fresh
+    recovered.published = fresh ∧ recovered.polls = state.polls + 1 := by
+  simp [writeMonitorSignalScope, commitScopedObservation, changed]
+
+theorem poll_first_remains_committed_when_the_editor_runs_afterward
+    (state : ScopedPollState) (candidate : ScopedPollObservation) (newScope : List Nat)
+    (captured : state.currentScope = candidate.scope) :
+    let edited := writeMonitorSignalScope (commitScopedObservation state candidate) newScope
+    edited.currentScope = newScope ∧ edited.published = candidate ∧ edited.polls = state.polls + 1 := by
+  simp [writeMonitorSignalScope, commitScopedObservation, captured]
+
+theorem excluding_drafts_cannot_commit_the_stale_draft_pr_43 :
+    let prior : ScopedPollObservation := ⟨[0], [42], 1, 10, 20⟩
+    let stale : ScopedPollObservation := ⟨[0], [43], 2, 20, 30⟩
+    let edited : ScopedPollState := ⟨[1], prior, 1⟩
+    commitScopedObservation edited stale = edited := by
+  decide
+
 #print axioms complete_has_bounded_terminal
 #print axioms incomplete_keeps_previous
 #print axioms repeated_cursor_is_unavailable
@@ -2431,5 +2489,10 @@ theorem uncommitted_pr_43_does_not_replace_committed_pr_42 :
 #print axioms a_lost_poll_reply_recovers_the_exact_committed_snapshot
 #print axioms staging_another_poll_keeps_a_recovered_commit
 #print axioms uncommitted_pr_43_does_not_replace_committed_pr_42
+#print axioms changed_monitor_scope_preserves_poll_snapshot_and_due_time
+#print axioms equivalent_normalized_scope_allows_the_poll
+#print axioms scope_edit_first_rejects_old_read_and_recovery_commits_once
+#print axioms poll_first_remains_committed_when_the_editor_runs_afterward
+#print axioms excluding_drafts_cannot_commit_the_stale_draft_pr_43
 
 end StewardPrSignalPagination
