@@ -1193,7 +1193,7 @@ def _consume_pending_periodic_report_intent(
         start = datetime.fromisoformat(cadence_window["start_at"].replace("Z", "+00:00"))
         end = datetime.fromisoformat(cadence_window["due_at"].replace("Z", "+00:00"))
         facts = [fact for fact in facts if fact.get("status") != "done" or (
-            start < datetime.fromisoformat(str(fact["completed_at"]).replace("Z", "+00:00")) <= end
+            start <= datetime.fromisoformat(str(fact["completed_at"]).replace("Z", "+00:00")) < end
         )]
         facts.append(_cadence_coverage_fact(cadence_window))
     request_path = _editorial_request_path(

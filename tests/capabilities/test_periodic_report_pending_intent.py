@@ -45,10 +45,13 @@ from loopx.control_plane.quota.live_decision import (
 
 GOAL_ID = "report-goal"
 AGENT_ID = "report-agent"
+DEFAULT_FINISHED_UPDATED_AT = "2026-08-30T09:00:00Z"
 
 
-def _calendar_fixture(tmp_path):
-    registry, runtime = _fixture(tmp_path)
+def _calendar_fixture(
+    tmp_path: Path, *, finished_updated_at: str = DEFAULT_FINISHED_UPDATED_AT
+) -> tuple[Path, Path]:
+    registry, runtime = _fixture(tmp_path, finished_updated_at=finished_updated_at)
     for path in (runtime / "goals" / GOAL_ID / "post_writeback_hooks").glob("*.json"):
         path.unlink()
     _enable_calendar(registry)
@@ -62,6 +65,56 @@ def _enable_calendar(registry):
         "rrule": "FREQ=WEEKLY;BYDAY=FR;BYHOUR=18", "timezone": "Asia/Shanghai",
     }
     registry.write_text(json.dumps(config))
+
+
+@pytest.mark.parametrize(
+    ("due_at", "finished_at", "included"),
+    [
+        ("2026-09-11T10:00:00Z", "2026-09-11T09:59:59.999999Z", True),
+        ("2026-09-11T10:00:00Z", "2026-09-11T10:00:00Z", False),
+        ("2026-09-18T10:00:00Z", "2026-09-11T10:00:00Z", True),
+        ("2026-09-18T10:00:00Z", "2026-09-18T10:00:00.000001Z", False),
+    ],
+)
+def test_calendar_editorial_cli_includes_start_and_excludes_end(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    due_at: str,
+    finished_at: str,
+    included: bool,
+) -> None:
+    from datetime import datetime, timedelta
+
+    from loopx.capabilities.periodic_report.cadence_runtime import (
+        extend_cadence_turn_start_dispatch,
+    )
+    from loopx.cli import main
+
+    registry, runtime = _calendar_fixture(tmp_path, finished_updated_at=finished_at)
+    due = datetime.fromisoformat(due_at)
+    dispatch = extend_cadence_turn_start_dispatch(
+        {},
+        registry_path=registry,
+        runtime_root=runtime,
+        goal_id=GOAL_ID,
+        agent_id=AGENT_ID,
+        now=due,
+    )
+    assert dispatch["failures"] == []
+    assert main([
+        "--registry", str(registry), "--runtime-root", str(runtime), "--format", "json",
+        "periodic-report", "consume-pending", "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
+        "--execute",
+    ]) == 0
+    result = json.loads(capsys.readouterr().out)
+    assert result["status"] == "editorial_required"
+    assert result["external_writes_performed"] is False
+    editorial = json.loads(Path(result["editorial_request_path"]).read_text(encoding="utf-8"))
+    window = editorial["actual_work_window"]
+    assert datetime.fromisoformat(window["start_at"]) == due - timedelta(days=7)
+    assert window["end_at"] == due_at
+    completions = [fact["completed_at"] for fact in editorial["facts"] if fact["status"] == "done"]
+    assert completions == ([finished_at] if included else [])
 
 
 def test_calendar_actual_cli_preserves_capability_action_without_host(tmp_path, capsys, monkeypatch):
@@ -484,7 +537,7 @@ def _intent() -> dict[str, object]:
 def _fixture(
     tmp_path: Path,
     *,
-    finished_updated_at: str = "2026-08-30T09:00:00Z",
+    finished_updated_at: str = DEFAULT_FINISHED_UPDATED_AT,
     provider: str = "file",
 ) -> tuple[Path, Path]:
     from tests.control_plane.canonical_authority_fixture import (
