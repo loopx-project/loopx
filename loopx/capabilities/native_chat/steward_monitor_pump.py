@@ -47,7 +47,7 @@ class _HashDigest(Protocol):
 
 
 _WitnessRecord = tuple[str, tuple[Path, ...]]
-_StatVersion = tuple[int, int, int, int]
+_StatVersion = tuple[int, int, int, int, int]
 _RegistryCacheEntry = tuple[_StatVersion | None, dict[str, str], str | None]
 _V = TypeVar("_V")
 
@@ -115,7 +115,7 @@ def _registry_goal_witness_token(
 ) -> str:
     try:
         st = registry_path.stat()
-        stat_version: _StatVersion | None = (st.st_dev, st.st_ino, st.st_mtime_ns, st.st_size)
+        stat_version: _StatVersion | None = (st.st_dev, st.st_ino, st.st_mtime_ns, st.st_size, st.st_ctime_ns)
     except FileNotFoundError:
         stat_version = None
     except OSError as exc:

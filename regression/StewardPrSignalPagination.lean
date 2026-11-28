@@ -2560,6 +2560,45 @@ theorem absent_journal_marker_cannot_skip_a_present_journal (version : ChatEvent
 theorem absent_journal_marker_stays_compatible :
     reuseChatEventObservation [] none = true := rfl
 
+/- This models a successful registry read during active backoff. The stamp
+   controls cache reuse. The selected Goal's digest controls early retry. -/
+def stewardRegistryWitnessFields (device inode mtime size ctime : Int) : List Int :=
+  [device, inode, mtime, size, ctime]
+
+def stewardRegistryGoalWitness (cachedStamp currentStamp : List Int)
+    (cachedGoal currentGoal : Nat) : Nat :=
+  if cachedStamp = currentStamp then cachedGoal else currentGoal
+
+def stewardRetryAfterGoalEdit (failureGoal : Nat) (cachedStamp currentStamp : List Int)
+    (cachedGoal currentGoal : Nat) : Bool :=
+  decide (stewardRegistryGoalWitness cachedStamp currentStamp cachedGoal currentGoal ≠ failureGoal)
+
+theorem steward_target_edit_retries_when_only_ctime_changes
+    (device inode mtime size before after : Int) (cachedGoal currentGoal : Nat)
+    (changedTime : before ≠ after) (changedGoal : currentGoal ≠ cachedGoal) :
+    stewardRetryAfterGoalEdit cachedGoal
+      (stewardRegistryWitnessFields device inode mtime size before)
+      (stewardRegistryWitnessFields device inode mtime size after) cachedGoal currentGoal = true := by
+  simp [stewardRetryAfterGoalEdit, stewardRegistryGoalWitness, stewardRegistryWitnessFields, changedTime, changedGoal]
+
+theorem steward_unrelated_registry_edit_keeps_backoff
+    (cachedStamp currentStamp : List Int) (goal : Nat) :
+    stewardRetryAfterGoalEdit goal cachedStamp currentStamp goal goal = false := by
+  unfold stewardRetryAfterGoalEdit stewardRegistryGoalWitness
+  split <;> simp
+
+theorem steward_unchanged_registry_stamp_reuses_the_goal_witness
+    (stamp : List Int) (cachedGoal currentGoal : Nat) :
+    stewardRegistryGoalWitness stamp stamp cachedGoal currentGoal = cachedGoal := by
+  simp [stewardRegistryGoalWitness]
+
+theorem steward_mtime_change_still_reloads_the_goal_witness
+    (device inode size ctime before after : Int) (cachedGoal currentGoal : Nat) (changed : before ≠ after) :
+    stewardRegistryGoalWitness
+      (stewardRegistryWitnessFields device inode before size ctime)
+      (stewardRegistryWitnessFields device inode after size ctime) cachedGoal currentGoal = currentGoal := by
+  simp [stewardRegistryGoalWitness, stewardRegistryWitnessFields, changed]
+
 #print axioms complete_has_bounded_terminal
 #print axioms incomplete_keeps_previous
 #print axioms repeated_cursor_is_unavailable
@@ -2850,5 +2889,9 @@ theorem absent_journal_marker_stays_compatible :
 #print axioms current_stamp_preserves_an_unchanged_replay_or_compaction_hit
 #print axioms absent_journal_marker_cannot_skip_a_present_journal
 #print axioms absent_journal_marker_stays_compatible
+#print axioms steward_target_edit_retries_when_only_ctime_changes
+#print axioms steward_unrelated_registry_edit_keeps_backoff
+#print axioms steward_unchanged_registry_stamp_reuses_the_goal_witness
+#print axioms steward_mtime_change_still_reloads_the_goal_witness
 
 end StewardPrSignalPagination

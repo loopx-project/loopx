@@ -11,6 +11,7 @@ import json
 import os
 from pathlib import Path
 import re
+import time
 from types import MappingProxyType
 from typing import cast
 
@@ -1311,8 +1312,9 @@ def _write_test_registry_envelope(path: Path, goals: list[dict[str, object]]) ->
     path.write_text(json.dumps(envelope, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 
+@pytest.mark.parametrize("preserve_mtime", [False, True], ids=["mtime-changes", "ctime-only"])
 def test_witness_backoff_ignores_unrelated_goal_and_binding_edits(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, preserve_mtime: bool,
 ) -> None:
     clock = {"now": 1000.0}
     monkeypatch.setattr(steward_monitor_pump.time, "monotonic", lambda: clock["now"])
@@ -1340,6 +1342,27 @@ def test_witness_backoff_ignores_unrelated_goal_and_binding_edits(
     ctrl.store = store
     _write_test_registry_envelope(ctrl.registry_path, [target_goal, unrelated_goal])
 
+    def rewrite_registry() -> None:
+        path = ctrl.registry_path
+        before = path.stat()
+        _write_test_registry_envelope(path, [target_goal, unrelated_goal])
+        if not preserve_mtime:
+            os.utime(path, ns=(before.st_atime_ns, before.st_mtime_ns + 1_000_000_000))
+            return
+
+        timestamps = (before.st_atime_ns, before.st_mtime_ns)
+        os.utime(path, ns=timestamps)
+        after = path.stat()
+        if after.st_ctime_ns == before.st_ctime_ns:
+            time.sleep(0.01)
+            os.utime(path, ns=timestamps)
+            after = path.stat()
+        if after.st_ctime_ns == before.st_ctime_ns:
+            pytest.skip("filesystem does not report a different change time for the rewrite")
+        assert (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns) == (
+            before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns,
+        )
+
     todos_calls: list[float] = []
 
     def failing_todos(_self: StewardMonitor, _actor: Mapping[str, object]) -> list[StewardTodoRecord]:
@@ -1354,7 +1377,7 @@ def test_witness_backoff_ignores_unrelated_goal_and_binding_edits(
 
     # t=1003: edit an unrelated Goal in registry.json AND an unrelated binding -> backoff MUST remain active.
     unrelated_goal["description"] = "other-v2"
-    _write_test_registry_envelope(ctrl.registry_path, [target_goal, unrelated_goal])
+    rewrite_registry()
     b_other["notes"] = "unrelated-binding-edited"
     clock["now"] = 1003.0
     steward_monitor_pump.pump_steward_monitors(_as_controller(ctrl))
@@ -1362,7 +1385,7 @@ def test_witness_backoff_ignores_unrelated_goal_and_binding_edits(
 
     # t=1004: edit ONLY the target Goal in registry.json -> witness invalidates backoff immediately.
     target_goal["description"] = "target-v2"
-    _write_test_registry_envelope(ctrl.registry_path, [target_goal, unrelated_goal])
+    rewrite_registry()
     clock["now"] = 1004.0
     steward_monitor_pump.pump_steward_monitors(_as_controller(ctrl))
     assert todos_calls == [1000.0, 1004.0]
