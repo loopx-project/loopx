@@ -24,6 +24,8 @@ async function privateFile(path: string, flags: number): Promise<FileHandle> {
   }
   const entry = await lstat(path);
   if (entry.isSymbolicLink()) throw new Error("private snapshot is a symlink");
+  // isFile() is true for a hard link. nlink === 1 is this inode's only name.
+  if (!entry.isFile() || entry.nlink !== 1) throw new Error("invalid private snapshot file");
   if (process.platform === "win32") {
     const python = process.env.LOOPX_EFFECT_RUNTIME_PYTHON_BIN;
     if (!python || !isAbsolute(python)) throw new Error("private snapshot ACL helper unavailable");
@@ -38,8 +40,8 @@ async function privateFile(path: string, flags: number): Promise<FileHandle> {
   const file = await open(path, flags | (constants.O_NOFOLLOW ?? 0));
   try {
     const stat = await file.stat();
-    if (!stat.isFile() || stat.dev !== entry.dev || stat.ino !== entry.ino || (process.getuid &&
-        (stat.uid !== process.getuid() || (stat.mode & 0o077) !== 0))) {
+    if (!stat.isFile() || stat.nlink !== 1 || stat.dev !== entry.dev || stat.ino !== entry.ino ||
+        (process.getuid && (stat.uid !== process.getuid() || (stat.mode & 0o077) !== 0))) {
       throw new Error("invalid private snapshot file");
     }
     return file;

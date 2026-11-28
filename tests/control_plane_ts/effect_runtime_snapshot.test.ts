@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import {execFile} from "node:child_process";
 import {createHash} from "node:crypto";
-import {mkdir, mkdtemp, writeFile, chmod, symlink, rm} from "node:fs/promises";
+import {mkdir, mkdtemp, writeFile, chmod, symlink, rm, link, readFile, lstat} from "node:fs/promises";
 import {join} from "node:path";
 import {test} from "node:test";
 import {promisify} from "node:util";
@@ -35,6 +35,49 @@ async function protectWindowsFixture(directory: string, path: string) {
 
 async function removeFixture(directory: string) {
   await rm(directory, {recursive: true, force: true, maxRetries: 10, retryDelay: 100});
+}
+
+function hardLinkUnsupported(error: unknown): boolean {
+  const code = typeof error === "object" && error && "code" in error ? String(error.code) : "";
+  return ["EPERM", "ENOTSUP", "EOPNOTSUPP", "EXDEV", "ENOSYS"].includes(code);
+}
+
+/** Same-uid hard link of an outside sentinel into a private effect directory. */
+async function hardLinkedPrivateLeaf(name: string): Promise<{
+  directory: string; outside: string; path: string; sentinel: string; bytes: Buffer;
+} | null> {
+  const directory = await createFixtureDirectory();
+  const outside = await mkdtemp(join(process.cwd(), ".local", "loopx-sentinel-"));
+  try {
+    const sentinel = join(outside, "sentinel.json");
+    const bytes = Buffer.from(JSON.stringify({sentinel: "keep", leaf: name}));
+    await writeFile(sentinel, bytes, {mode: 0o600});
+    await chmod(sentinel, 0o600);
+    await chmod(directory, 0o700);
+    const path = join(directory, name);
+    try {
+      await link(sentinel, path);
+    } catch (error) {
+      if (!hardLinkUnsupported(error)) throw error;
+      await removeFixture(directory);
+      await removeFixture(outside);
+      return null;
+    }
+    await protectWindowsFixture(directory, path);
+    const entry = await lstat(path);
+    const external = await lstat(sentinel);
+    assert.equal(entry.isSymbolicLink(), false);
+    assert.equal(entry.isFile(), true);
+    assert.equal(entry.dev, external.dev);
+    assert.equal(entry.ino, external.ino);
+    assert.equal(entry.nlink, 2);
+    assert.deepEqual(await readFile(sentinel), bytes);
+    return {directory, outside, path, sentinel, bytes};
+  } catch (error) {
+    await removeFixture(directory);
+    await removeFixture(outside);
+    throw error;
+  }
 }
 
 test("local snapshot accepts exact private bytes and rejects altered or unsafe references", async () => {
@@ -89,5 +132,61 @@ test("large response sink is private and digest-bound", async () => {
     }
   } finally {
     await removeFixture(directory);
+  }
+});
+
+test("hard-linked private snapshot is rejected and the external file stays unchanged", async (t) => {
+  const fixture = await hardLinkedPrivateLeaf("params.json");
+  if (fixture === null) {
+    t.skip("this host cannot create a hard link");
+    return;
+  }
+  const {directory, outside, path, sentinel, bytes} = fixture;
+  try {
+    const ref = {path, byte_count: bytes.length,
+      sha256: createHash("sha256").update(bytes).digest("hex")};
+    let value: unknown;
+    let error: unknown;
+    try {
+      value = await readPrivateJsonSnapshot(ref);
+    } catch (caught) {
+      error = caught;
+    }
+    assert.deepEqual(await readFile(sentinel), bytes);
+    assert.equal(value, undefined);
+    assert.match(error instanceof Error ? error.message : "",
+      /private snapshot unavailable or invalid/);
+  } finally {
+    await removeFixture(directory);
+    await removeFixture(outside);
+  }
+});
+
+test("hard-linked response sink is rejected without clobbering the external file", async (t) => {
+  const fixture = await hardLinkedPrivateLeaf("response.json");
+  if (fixture === null) {
+    t.skip("this host cannot create a hard link");
+    return;
+  }
+  const {directory, outside, path, sentinel, bytes} = fixture;
+  try {
+    const payload = Buffer.from(JSON.stringify({clobber: true}));
+    let error: unknown;
+    try {
+      const file = await openPrivateResponseSink(path);
+      try {
+        await writePrivateResponse(file, payload);
+      } finally {
+        await file.close();
+      }
+    } catch (caught) {
+      error = caught;
+    }
+    assert.deepEqual(await readFile(sentinel), bytes);
+    assert.match(error instanceof Error ? error.message : "",
+      /private response sink unavailable or invalid/);
+  } finally {
+    await removeFixture(directory);
+    await removeFixture(outside);
   }
 });

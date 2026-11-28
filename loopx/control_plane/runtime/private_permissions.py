@@ -86,14 +86,19 @@ def _protect_windows_path(path: Path, *, directory: bool) -> None:
 def require_private_path(path: Path, *, directory: bool = False, descriptor: int | None = None) -> None:
     """Read OS access facts without repairing an untrusted caller's file."""
     info = path.lstat()
+    # A hard link is a regular file. Directories keep their ordinary link
+    # count; a leaf is private only when this entry is its only name.
     if (stat.S_ISLNK(info.st_mode)
             or getattr(info, "st_file_attributes", 0) & 0x400
-            or (not stat.S_ISDIR(info.st_mode) if directory else not stat.S_ISREG(info.st_mode))):
+            or (not stat.S_ISDIR(info.st_mode) if directory else not stat.S_ISREG(info.st_mode))
+            or (not directory and info.st_nlink != 1)):
         raise OSError("private IO path is not a regular owned leaf")
     if descriptor is not None:
         opened = os.fstat(descriptor)
         if (opened.st_dev, opened.st_ino) != (info.st_dev, info.st_ino):
             raise OSError("private IO path changed after open")
+        if not directory and (not stat.S_ISREG(opened.st_mode) or opened.st_nlink != 1):
+            raise OSError("private IO path is not a regular owned leaf")
         info = opened
     if sys.platform != "win32":
         if info.st_uid != os.getuid() or info.st_mode & 0o077:
